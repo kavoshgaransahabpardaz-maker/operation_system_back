@@ -1,0 +1,56 @@
+# Web framework
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+psycopg2-binary==2.9.10
+alembic==1.14.0
+
+# Task queue
+celery[redis]==5.4.0
+redis==5.2.1
+
+# Object storage
+boto3==1.35.80
+
+# Auth
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Validation / settings
+pydantic==2.10.3
+pydantic-settings==2.6.1
+python-multipart==0.0.20
+
+# HTTP client (OAuth flows)
+httpx==0.28.1
+httpx-oauth==0.15.1
+
+# AI
+openai==1.57.4
+
+# OCR / PDF
+pdfplumber==0.11.4
+pytesseract==0.3.13
+Pillow==11.0.0
+langdetect==1.0.9
+
+# Email providers
+imapclient==3.0.1
+google-auth==2.37.0
+google-auth-oauthlib==1.2.1
+msal==1.31.1
+
+# Utilities
+python-dotenv==1.0.1
+cryptography==44.0.0
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-mock==3.14.0
+moto[s3]==5.0.22
+anyio==4.7.0
+aiosqlite==0.20.0
