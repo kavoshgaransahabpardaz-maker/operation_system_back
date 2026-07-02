@@ -10,7 +10,6 @@ x-app-common: &app-common
   build:
     context: .
     dockerfile: Dockerfile
-    target: runtime
   image: brokerai:${IMAGE_TAG:-latest}
   env_file: .env
   restart: unless-stopped
