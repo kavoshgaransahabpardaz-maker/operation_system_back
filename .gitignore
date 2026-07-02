@@ -1,0 +1,23 @@
+# Environment files — never commit real secrets
+.env
+.env.production
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+
+# Alembic generated (keep versions/ dir via .gitkeep)
+# alembic/versions/*.py  # Remove this line if you want to track migrations
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
