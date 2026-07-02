@@ -15,6 +15,9 @@
       "Bash(.venv/bin/python -c ':*)",
       "Bash(.venv/bin/python -m pytest tests/test_pipeline.py::test_ocr_service_then_classification_service -q)",
       "Bash(rtk read:*)"
+    ],
+    "additionalDirectories": [
+      "/Users/behnam/vscode/veritariffai-back"
     ]
   },
   "hooks": {
