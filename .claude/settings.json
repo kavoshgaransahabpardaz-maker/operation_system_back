@@ -20,7 +20,10 @@
       "Bash(nslookup api.veritariffai.co)",
       "Bash(ssh root@78.129.155.206 \"cd /opt/operation_system_back && docker compose -f docker-compose.prod.yml logs api | tail -30\")",
       "Bash(ssh root@78.129.155.206 \"cd /opt/operation_system_back && docker compose -f docker-compose.prod.yml logs migrate && echo '---' && docker compose -f docker-compose.prod.yml logs api | grep -A5 'ERROR\\\\|500\\\\|Exception' | tail -30\")",
-      "Bash(rtk git:*)"
+      "Bash(rtk git:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git add:*)",
+      "Bash(git push:*)"
     ],
     "additionalDirectories": [
       "/Users/behnam/vscode/veritariffai-back"
