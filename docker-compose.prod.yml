@@ -187,6 +187,7 @@ services:
     networks:
       - internal
       - external
+      - brokerai-web
     depends_on:
       api:
         condition: service_healthy
@@ -213,6 +214,8 @@ networks:
     internal: true
   external:
     driver: bridge
+  brokerai-web:
+    external: true
 
 volumes:
   postgres_data:

@@ -14,7 +14,10 @@
       "Bash(.venv/bin/python -m pytest tests/test_pipeline.py::test_shipment_matcher_no_refs_marks_unmatched tests/test_pipeline.py::test_second_doc_with_same_ref_joins_existing_shipment -q)",
       "Bash(.venv/bin/python -c ':*)",
       "Bash(.venv/bin/python -m pytest tests/test_pipeline.py::test_ocr_service_then_classification_service -q)",
-      "Bash(rtk read:*)"
+      "Bash(rtk read:*)",
+      "Bash(dig api.veritariffai.co +short)",
+      "Bash(host api.veritariffai.co)",
+      "Bash(nslookup api.veritariffai.co)"
     ],
     "additionalDirectories": [
       "/Users/behnam/vscode/veritariffai-back"
