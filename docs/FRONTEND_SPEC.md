@@ -34,6 +34,9 @@ src/
     emails.ts
     shipments.ts
     workspace.ts
+    fields.ts        # NEW — extracted field review
+    flags.ts         # NEW — mismatch flags
+    orgSettings.ts   # NEW — tolerance settings
   components/
     layout/          # AppShell, Sidebar, TopBar
     ui/              # shadcn/ui re-exports
@@ -43,12 +46,14 @@ src/
     dashboard/       # DashboardPage + widgets
     documents/       # DocumentListPage, DocumentDetailPage, UploadZone
     shipments/       # ShipmentListPage, ShipmentDetailPage
+    fields/          # NEW — FieldReviewPanel, FieldRow, CorrectFieldDialog
+    flags/           # NEW — FlagListPanel, FlagCard, ResolveFlagDialog
     email/           # EmailConnectionsPage
-    settings/        # UserManagementPage
+    settings/        # UserManagementPage, OrgSettingsPage (NEW)
   hooks/             # useCurrentUser, useUpload, usePoll
   lib/
     utils.ts         # cn(), formatBytes(), formatDate()
-    constants.ts     # STATUS_COLORS, DOC_TYPE_LABELS, etc.
+    constants.ts     # STATUS_COLORS, DOC_TYPE_LABELS, FIELD_NAME_LABELS, etc.
   types/             # TypeScript interfaces mirroring backend schemas
   routes.tsx         # Route definitions
   main.tsx
@@ -103,9 +108,115 @@ export type ActivityAction =
   | 'document_reassociated'
   | 'shipment_created'
   | 'shipment_status_updated'
-  | 'email_synced';
+  | 'email_synced'
+  | 'field_extracted'
+  | 'field_confirmed'
+  | 'field_corrected'
+  | 'flag_created'
+  | 'flag_resolved'
+  | 'comparison_run'
+  | 'settings_updated';
 
-// ── Models ─────────────────────────────────────────────────────────────────
+// ── NEW: Field extraction ──────────────────────────────────────────────────
+
+export type FieldName =
+  | 'party_shipper'
+  | 'party_consignee'
+  | 'invoice_value'
+  | 'currency'
+  | 'gross_weight'
+  | 'net_weight'
+  | 'quantity'
+  | 'hs_code'
+  | 'stated_origin'
+  | 'incoterm'
+  | 'invoice_date'
+  | 'shipment_date'
+  | 'reference';
+
+export type FieldStatus = 'extracted' | 'confirmed' | 'corrected';
+
+export type FieldType = 'string' | 'decimal' | 'date' | 'iso_code';
+
+export interface ExtractedField {
+  id: string;
+  document_id: string;
+  shipment_id: string | null;
+  org_id: string;
+  field_name: FieldName;
+  value_raw: string;
+  value_normalized: string | null;
+  field_type: FieldType;
+  confidence: number;           // 0.0 – 1.0
+  page_number: number | null;
+  status: FieldStatus;
+  confirmed_at: string | null;
+  confirmed_by: string | null;
+  corrected_value: string | null;
+  corrected_by: string | null;
+  corrected_at: string | null;
+  created_at: string;
+}
+
+// ── NEW: Flags & mismatches ────────────────────────────────────────────────
+
+export type FlagType =
+  | 'missing_document'
+  | 'missing_field'
+  | 'mismatch'
+  | 'low_confidence'
+  | 'hs_inconsistency';
+
+export type FlagSeverity = 'critical' | 'warning' | 'info';
+
+export type FlagStatus = 'open' | 'resolved';
+
+export type FlagDecision = 'accepted' | 'overridden' | 'dismissed';
+
+export interface ConflictingValue {
+  document_id: string;
+  field_name: FieldName;
+  value_raw: string;
+  page_number: number | null;
+}
+
+export interface Flag {
+  id: string;
+  shipment_id: string;
+  org_id: string;
+  flag_type: FlagType;
+  severity: FlagSeverity;
+  title: string;
+  description: string;
+  conflicting_values: ConflictingValue[] | null;
+  status: FlagStatus;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface FlagResolution {
+  id: string;
+  flag_id: string;
+  resolved_by: string;
+  decision: FlagDecision;
+  chosen_value: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+// ── NEW: Org settings ──────────────────────────────────────────────────────
+
+export interface OrgSettings {
+  id: string;
+  org_id: string;
+  weight_qty_tolerance_pct: number;   // default 0.5 (= 0.5%)
+  value_tolerance_pct: number;        // default 1.0 (= 1.0%)
+  name_match_threshold: number;       // default 0.93 (= 93%)
+  created_at: string;
+  updated_at: string;
+}
+
+// ── Existing models ────────────────────────────────────────────────────────
 
 export interface User {
   id: string;
@@ -372,6 +483,53 @@ export const workspaceApi = {
 };
 ```
 
+### `src/api/fields.ts` — NEW
+```typescript
+export const fieldsApi = {
+  // All extracted fields for a shipment (across all documents)
+  listByShipment: (shipmentId: string) =>
+    apiClient.get<ExtractedField[]>(`/api/v1/shipments/${shipmentId}/fields`),
+
+  // Fields extracted from a single document
+  listByDocument: (documentId: string) =>
+    apiClient.get<ExtractedField[]>(`/api/v1/documents/${documentId}/fields`),
+
+  // User confirms the extracted value is correct
+  confirm: (fieldId: string) =>
+    apiClient.post<ExtractedField>(`/api/v1/fields/${fieldId}/confirm`),
+
+  // User provides a corrected value
+  correct: (fieldId: string, corrected_value: string) =>
+    apiClient.post<ExtractedField>(`/api/v1/fields/${fieldId}/correct`, { corrected_value }),
+};
+```
+
+### `src/api/flags.ts` — NEW
+```typescript
+export const flagsApi = {
+  // List flags for a shipment. Optional filter: status=open|resolved
+  listByShipment: (shipmentId: string, status?: 'open' | 'resolved') =>
+    apiClient.get<Flag[]>(`/api/v1/shipments/${shipmentId}/flags`, {
+      params: status ? { status } : {},
+    }),
+
+  // Resolve a flag
+  resolve: (flagId: string, data: { decision: FlagDecision; chosen_value?: string; note?: string }) =>
+    apiClient.post<Flag>(`/api/v1/flags/${flagId}/resolve`, data),
+};
+```
+
+### `src/api/orgSettings.ts` — NEW
+```typescript
+export const orgSettingsApi = {
+  get: () => apiClient.get<OrgSettings>('/api/v1/org/settings'),
+
+  update: (data: Partial<Pick<OrgSettings,
+    'weight_qty_tolerance_pct' | 'value_tolerance_pct' | 'name_match_threshold'
+  >>) => apiClient.patch<OrgSettings>('/api/v1/org/settings', data),
+};
+```
+
 ---
 
 ## 5. Constants & Helpers
@@ -441,6 +599,55 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   operator: 'Operator',
 };
 
+// NEW
+export const FIELD_NAME_LABELS: Record<FieldName, string> = {
+  party_shipper: 'Shipper',
+  party_consignee: 'Consignee',
+  invoice_value: 'Invoice Value',
+  currency: 'Currency',
+  gross_weight: 'Gross Weight',
+  net_weight: 'Net Weight',
+  quantity: 'Quantity',
+  hs_code: 'HS Code',
+  stated_origin: 'Country of Origin',
+  incoterm: 'Incoterm',
+  invoice_date: 'Invoice Date',
+  shipment_date: 'Shipment Date',
+  reference: 'Reference Number',
+};
+
+export const FLAG_TYPE_LABELS: Record<FlagType, string> = {
+  missing_document: 'Missing Document',
+  missing_field: 'Missing Field',
+  mismatch: 'Value Mismatch',
+  low_confidence: 'Low Confidence',
+  hs_inconsistency: 'HS Code Inconsistency',
+};
+
+export const FLAG_SEVERITY_COLORS: Record<FlagSeverity, string> = {
+  critical: 'bg-red-100 text-red-700 border-red-200',
+  warning: 'bg-amber-100 text-amber-700 border-amber-200',
+  info: 'bg-blue-50 text-blue-700 border-blue-200',
+};
+
+export const FLAG_SEVERITY_ICON_COLORS: Record<FlagSeverity, string> = {
+  critical: 'text-red-500',
+  warning: 'text-amber-500',
+  info: 'text-blue-400',
+};
+
+export const FIELD_STATUS_LABELS: Record<FieldStatus, string> = {
+  extracted: 'Extracted',
+  confirmed: 'Confirmed',
+  corrected: 'Corrected',
+};
+
+export const FIELD_STATUS_COLORS: Record<FieldStatus, string> = {
+  extracted: 'bg-gray-100 text-gray-600',
+  confirmed: 'bg-green-100 text-green-700',
+  corrected: 'bg-purple-100 text-purple-700',
+};
+
 export const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50 MB
 ```
 
@@ -463,6 +670,7 @@ Use `createBrowserRouter` with the following route tree.
 | `/shipments/:id` | `ShipmentDetailPage` | Yes | |
 | `/email` | `EmailConnectionsPage` | Yes | |
 | `/settings/users` | `UserManagementPage` | Yes | Admin only |
+| `/settings/org` | `OrgSettingsPage` | Yes | Admin only — NEW |
 
 Wrap all authenticated routes in an `AuthGuard` component that reads `localStorage.access_token` and redirects to `/login` if missing.
 
@@ -486,6 +694,7 @@ All authenticated pages render inside `AppShell`:
 | Ship | Shipments | `/shipments` | All roles |
 | Mail | Email | `/email` | All roles |
 | Users | Users | `/settings/users` | Admin only |
+| Settings | Org Settings | `/settings/org` | Admin only — NEW |
 
 Active route highlights with a filled background. Sidebar shows the org name at the top and a small user-role badge at the bottom.
 
@@ -590,17 +799,15 @@ Buttons:
 
 Clicking a row navigates to `/documents/:id`.
 
-**Pagination**: Load all (the API returns arrays, no pagination params — just show all).
-
 **Empty state**: Upload icon + "No documents yet. Upload your first document."
 
 ---
 
 ### 8.7 Document Detail Page (`/documents/:id`)
 
-Calls `GET /api/v1/documents/:id` and `GET /api/v1/classifications/:id` in parallel.
+Calls `GET /api/v1/documents/:id`, `GET /api/v1/classifications/:id`, and `GET /api/v1/documents/:id/fields` in parallel.
 
-**Layout**: Two columns on desktop (document info left, actions right).
+**Layout**: Two columns on desktop (document info left, actions right), with field extraction panel below.
 
 **Left panel — Document Info**
 - Filename (large, with file type icon)
@@ -627,7 +834,43 @@ If no classification:
 - "Save Override" button → calls `POST /api/v1/classifications/:id/override`
 - On success: invalidate queries, show toast "Classification updated", close dialog
 
-**Duplicates section** (below main panels)
+**Document Processing Stepper**
+
+Visual stepper showing pipeline state:
+```
+Uploaded → OCR Pending → OCR Processing → Classified / Needs Review → Matched / Unmatched
+```
+Active step highlighted. If `ocr_failed`, show red error state on OCR step.
+
+**Extracted Fields Panel** — NEW
+
+Source: `GET /api/v1/documents/:id/fields`
+
+Show below the main panels as a collapsible section "Extracted Fields".
+
+- If no fields yet (extraction pending): show spinner with "Extraction in progress…"
+- If fields exist: show as a table/list
+
+Columns:
+| Column | Notes |
+|---|---|
+| Field | `FIELD_NAME_LABELS[field_name]` |
+| Value | `value_normalized ?? value_raw` |
+| Page | Page number or "—" |
+| Confidence | `ConfidenceBadge` (progress bar) |
+| Status | `FIELD_STATUS_COLORS` badge (Extracted / Confirmed / Corrected) |
+| Actions | "Confirm" button (if status=extracted) + "Correct" button (always) |
+
+**Confirm**: calls `POST /api/v1/fields/:id/confirm` → optimistic update status to `confirmed`, show toast "Field confirmed"
+
+**Correct Field Dialog**: opened by "Correct" button
+- Field name label (read-only)
+- Current value (read-only, shown for reference)
+- "Corrected value" text input (required)
+- Submit → `POST /api/v1/fields/:id/correct` with `{ corrected_value }`
+- On success: invalidate fields query, toast "Field corrected", close dialog
+
+**Duplicates section** (below fields panel)
 - Calls `GET /api/v1/documents/:id/duplicates`
 - If duplicates exist: show a warning banner "Duplicate files detected" with a list of filenames (clickable links)
 - If no duplicates: hidden
@@ -653,7 +896,7 @@ Calls `GET /api/v1/shipments/`.
 | Shipment ID | First 8 chars of UUID. Click → `/shipments/:id` |
 | References | Show up to 3 reference chips (type + value). E.g. "BL: MSKU1234" |
 | Status | `ShipmentStatus` badge |
-| Documents | Count is shown in the workspace detail, but here leave this blank or link to detail |
+| Open Flags | Count of open flags — show red badge if > 0, gray "0" otherwise. Tooltip "X open issues" |
 | Created | Relative date |
 | Updated | Relative date |
 
@@ -663,14 +906,19 @@ Clicking a row navigates to `/shipments/:id`.
 
 ---
 
-### 8.9 Shipment Detail Page (`/shipments/:id`)
+### 8.9 Shipment Detail Page (`/shipments/:id`) — UPDATED
 
-Calls `GET /api/v1/workspace/shipments/:id` and `GET /api/v1/workspace/shipments/:id/activity`.
+Calls in parallel:
+- `GET /api/v1/workspace/shipments/:id`
+- `GET /api/v1/workspace/shipments/:id/activity`
+- `GET /api/v1/shipments/:id/flags` (all flags, no status filter)
+- `GET /api/v1/shipments/:id/fields` (all extracted fields for this shipment)
 
 **Header**
 - "Shipment" + short ID (first 8 chars of UUID)
 - Status badge (large)
 - Status update control: `Select` dropdown (Active / Complete / On Hold) → calls `PATCH /api/v1/shipments/:id` on change with confirm dialog
+- **Open flags summary**: if any open flags exist, show a red/amber banner: "X open issue(s) — review required" with a scroll-to-flags link
 
 **References section**
 - Chips/pills for each reference: type label + value. Example: `[BL: MAEU987654321]`
@@ -688,15 +936,88 @@ Columns:
 | Source | Upload / Email badge |
 | Date | Relative date |
 
+---
+
+#### Flags Panel — NEW
+
+Source: `GET /api/v1/shipments/:id/flags`
+
+**Section header**: "Issues & Mismatches" + open count badge  
+**Filter tabs**: All | Open | Resolved
+
+Flags are ordered: critical → warning → info (backend returns them in this order).
+
+Each flag renders as a `FlagCard`:
+
+```
+┌─────────────────────────────────────────────────────┐
+│ [severity icon] CRITICAL   Value Mismatch           │
+│ HS Code differs between documents                   │
+│                                                     │
+│ Conflicting values:                                 │
+│   • Invoice (page 2): 7208.51.00                    │
+│   • Packing List (page 1): 7208.52.00               │
+│                                                     │
+│ [Resolve]                          [open since 2h]  │
+└─────────────────────────────────────────────────────┘
+```
+
+- Severity icon: `AlertOctagon` (critical/red), `AlertTriangle` (warning/amber), `Info` (info/blue)
+- `conflicting_values` list: shows document filename (link to `/documents/:id`) + page number + value
+- Resolved flags show a green "Resolved" badge + resolution decision/note
+- "Resolve" button (only on open flags) → opens `ResolveFlagDialog`
+
+**Resolve Flag Dialog**:
+- Flag title + description shown (read-only)
+- Conflicting values list (read-only)
+- `decision` select: "Accept as-is", "Override with value", "Dismiss"
+- `chosen_value` text input (shown only when decision = "Override with value")
+- `note` textarea (optional, for all decisions)
+- Submit → `POST /api/v1/flags/:id/resolve`
+- On success: invalidate flags query, toast "Flag resolved", close dialog
+
+**Empty state** (no flags): Green checkmark + "No issues detected. All extracted fields are consistent."
+
+---
+
+#### Extracted Fields Panel — NEW
+
+Source: `GET /api/v1/shipments/:id/fields`
+
+**Section header**: "Extracted Fields" + field count badge
+
+**Group by `field_name`**: each field name has potentially multiple values (one per document). Show grouped rows.
+
+Layout: one row per unique `field_name`.
+
+| Column | Notes |
+|---|---|
+| Field | `FIELD_NAME_LABELS[field_name]` |
+| Values | If all docs agree: single value. If mismatch: show each source doc as a chip with value |
+| Confidence | Lowest confidence across sources (worst-case) |
+| Status | If any field in group is `extracted` → "Needs Review". If all `confirmed`/`corrected` → "Reviewed" |
+| Actions | "Review all" → expands to show per-document breakdown with confirm/correct per field |
+
+**Expand row** shows individual `ExtractedField` records for that field name, each with:
+- Source document filename (link)
+- `value_normalized ?? value_raw`
+- Confidence badge
+- Status badge
+- "Confirm" + "Correct" buttons (same behavior as Document Detail)
+
+**Empty state**: Spinner if documents are still being processed. "No fields extracted yet — fields are extracted automatically after classification."
+
+---
+
 **Activity Log section**
 Source: `GET /api/v1/workspace/shipments/:id/activity`
 
 Timeline list, newest first. Each entry:
 - Icon per action type (see below)
-- Human-readable action description (see Action Labels below)
+- Human-readable action description
 - Relative timestamp
 
-**Action icons & labels**:
+**Action icons & labels** (updated with new actions):
 | Action | Icon | Description |
 |---|---|---|
 | `document_uploaded` | Upload | "Document uploaded" |
@@ -707,8 +1028,15 @@ Timeline list, newest first. Each entry:
 | `shipment_created` | Plus | "Shipment created" |
 | `shipment_status_updated` | RefreshCw | "Status changed to {status}" |
 | `email_synced` | Mail | "Email sync completed" |
+| `field_extracted` | Scan | "Fields extracted from document" |
+| `field_confirmed` | CheckCircle | "Field {field_name} confirmed" |
+| `field_corrected` | PenLine | "Field {field_name} corrected" |
+| `flag_created` | AlertTriangle | "Issue detected: {flag_title}" |
+| `flag_resolved` | CheckCheck | "Issue resolved: {flag_title}" |
+| `comparison_run` | GitCompare | "Comparison run — {n} issue(s) found" |
+| `settings_updated` | Settings | "Org settings updated" |
 
-Use `details` JSON from the activity log entry to fill in `{doc_type}` or `{status}` where shown.
+Use `details` JSON from the activity log entry to fill in template values.
 
 ---
 
@@ -774,6 +1102,36 @@ On success: close dialog, refresh list, toast "User invited"
 
 ---
 
+### 8.12 Org Settings Page (`/settings/org`) — NEW
+
+**Admin only.** Non-admins see a 403 message.
+
+Calls `GET /api/v1/org/settings`.
+
+**Header**: "Organisation Settings"
+
+**Tolerance Settings Card**
+
+Description: *"These thresholds control when mismatches are flagged. Zero-tolerance fields (HS Code, Origin, Currency) are always flagged on any difference."*
+
+Form fields:
+
+| Field | Label | Notes |
+|---|---|---|
+| `weight_qty_tolerance_pct` | Weight & Quantity Tolerance (%) | Number input, 0.0–100.0, step 0.1. Default 0.5 |
+| `value_tolerance_pct` | Invoice Value Tolerance (%) | Number input, 0.0–100.0, step 0.1. Default 1.0 |
+| `name_match_threshold` | Party Name Match Threshold (%) | Number input, 0–100, step 1. Display as % (multiply stored value by 100). Default 93 |
+
+Note: `name_match_threshold` is stored as 0.0–1.0 on the backend (e.g. 0.93). Display as percentage (93%). Convert on submit: `value / 100`.
+
+**"Save Settings"** button → `PATCH /api/v1/org/settings`  
+On success: toast "Settings saved", invalidate settings query.
+
+**Zero-tolerance notice** (info box below form):
+> The following fields are always flagged on any difference, regardless of tolerance settings: **HS Code**, **Country of Origin**, **Currency**, **Incoterm**.
+
+---
+
 ## 9. Shared Components
 
 ### `StatusBadge`
@@ -813,6 +1171,24 @@ Colored pill: type label (bold) + value. Colors per type:
 - `container`: teal
 - `internal`: gray
 
+### `FlagCard` — NEW
+```
+Props: { flag: Flag, onResolve: (flag: Flag) => void }
+```
+Card with severity-colored left border. Shows title, description, conflicting values list (each value linking to the source document), severity badge, created time. "Resolve" button (hidden if already resolved).
+
+### `FieldStatusBadge` — NEW
+```
+Props: { status: FieldStatus }
+```
+Pill using `FIELD_STATUS_COLORS`. Labels: Extracted / Confirmed / Corrected.
+
+### `SeverityBadge` — NEW
+```
+Props: { severity: FlagSeverity }
+```
+Pill using `FLAG_SEVERITY_COLORS`. Labels: Critical / Warning / Info.
+
 ---
 
 ## 10. State Management
@@ -829,12 +1205,16 @@ export const queryKeys = {
   document: (id: string) => ['document', id],
   classification: (docId: string) => ['classification', docId],
   duplicates: (docId: string) => ['duplicates', docId],
+  documentFields: (docId: string) => ['documentFields', docId],   // NEW
   shipments: ['shipments'],
   shipment: (id: string) => ['shipment', id],
   shipmentDetail: (id: string) => ['shipmentDetail', id],
+  shipmentFields: (id: string) => ['shipmentFields', id],          // NEW
+  shipmentFlags: (id: string, status?: string) => ['shipmentFlags', id, status], // NEW
   activityLog: (id: string) => ['activityLog', id],
   emailConnections: ['emailConnections'],
   dashboard: ['dashboard'],
+  orgSettings: ['orgSettings'],                                    // NEW
 };
 ```
 
@@ -842,6 +1222,8 @@ export const queryKeys = {
 
 - `dashboard`: every 30 seconds (`refetchInterval: 30_000`)
 - `document` detail: every 10 seconds when status is `ocr_pending` or `ocr_processing` (use `refetchInterval` conditionally)
+- `documentFields`: every 10 seconds when document status is `classified` but fields array is empty (extraction in progress)
+- `shipmentFlags`: no polling (manual invalidation after resolve)
 - All others: default (no polling)
 
 ---
@@ -889,10 +1271,11 @@ VITE_API_URL=http://localhost:8000
 Show this lifecycle visually on `DocumentDetailPage` as a stepper or progress indicator:
 
 ```
-Uploaded → OCR Pending → OCR Processing → Classified / Needs Review → Matched / Unmatched
+Uploaded → OCR Pending → OCR Processing → Classified / Needs Review → Fields Extracted → Matched / Unmatched
 ```
 
-If `ocr_failed`, show a red error state on the OCR step.
+If `ocr_failed`, show a red error state on the OCR step.  
+If fields are extracted but low-confidence flags exist, show a warning indicator on the "Fields Extracted" step.
 
 ---
 
@@ -907,12 +1290,13 @@ Implement in this order to deliver value incrementally:
 5. **AppShell + Sidebar + routing skeleton**
 6. **Dashboard page**
 7. **Document List + Upload**
-8. **Document Detail + Classification Override + Reassociate**
-9. **Shipment List**
-10. **Shipment Detail + Activity Log**
+8. **Document Detail + Classification Override + Reassociate + Extracted Fields panel**
+9. **Shipment List** (with open-flag count column)
+10. **Shipment Detail + Flags Panel + Extracted Fields grouped panel + Activity Log**
 11. **Email Connections page**
 12. **User Management page** (admin only)
-13. **Polish**: empty states, loading states, error handling, responsive layout
+13. **Org Settings page** (admin only)
+14. **Polish**: empty states, loading states, error handling, responsive layout
 
 ---
 
@@ -922,7 +1306,12 @@ Implement in this order to deliver value incrementally:
 - On a **409 Conflict** from upload, show "Duplicate file detected" and link to the existing document.
 - The **"Override Classification"** button is always visible on Document Detail, even when no classification exists yet.
 - Status badge colors must follow the constants defined in Section 5 — do not invent new colors.
-- **Admin-only routes** (`/settings/users`): check `user.role === 'admin'` after loading `useCurrentUser`. Redirect or show a 403 message for non-admins.
-- **Confidence threshold**: visually distinguish ≥ 70% (good), 50–69% (caution), < 50% (poor).
+- **Admin-only routes** (`/settings/users`, `/settings/org`): check `user.role === 'admin'` after loading `useCurrentUser`. Redirect or show a 403 message for non-admins.
+- **Confidence threshold**: visually distinguish ≥ 70% (good), 50–69% (caution), < 50% (poor). Fields with confidence < 70% must show a visual warning.
 - Document detail page **polls every 10 seconds** if status is `ocr_pending` or `ocr_processing`, stops polling once status changes.
 - Shipment references: render each `ref_type` + `ref_value` pair as a labeled chip — never just raw values.
+- **Flag severity order**: always display critical flags before warning, warning before info. Never mix the order.
+- **FlagResolution is append-only**: once a flag is resolved it cannot be un-resolved. The UI must not show an "unresolve" option.
+- **Field corrections**: after correcting a field, the old `value_raw` is preserved and shown as "original". Never hide the original extraction.
+- **Zero-tolerance fields**: HS Code, Country of Origin, Currency, Incoterm. Any mismatch on these produces a `critical` flag regardless of org settings. Make this visible in the UI with a tooltip or note on those field rows.
+- `name_match_threshold` is stored as 0.0–1.0. Always display as a percentage (multiply by 100) in the UI.
