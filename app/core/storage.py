@@ -27,7 +27,7 @@ def upload_file(file_obj: BinaryIO, org_id: str, filename: str, content_type: st
         file_obj,
         settings.S3_BUCKET_NAME,
         key,
-        ExtraArgs={"ContentType": content_type, "ServerSideEncryption": "AES256"},
+        ExtraArgs={"ContentType": content_type},
     )
     return key
 
