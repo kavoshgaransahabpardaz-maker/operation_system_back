@@ -18,6 +18,13 @@ class ActivityAction(str, enum.Enum):
     SHIPMENT_CREATED = "shipment_created"
     SHIPMENT_STATUS_UPDATED = "shipment_status_updated"
     EMAIL_SYNCED = "email_synced"
+    FIELD_EXTRACTED = "field_extracted"
+    FIELD_CONFIRMED = "field_confirmed"
+    FIELD_CORRECTED = "field_corrected"
+    FLAG_CREATED = "flag_created"
+    FLAG_RESOLVED = "flag_resolved"
+    COMPARISON_RUN = "comparison_run"
+    SETTINGS_UPDATED = "settings_updated"
 
 
 class ActivityLog(Base):

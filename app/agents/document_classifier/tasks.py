@@ -38,3 +38,8 @@ def run_ocr_then_classify(self, document_id: str):
     from app.agents.shipment_matcher.tasks import run_shipment_matching
     run_shipment_matching.apply_async(args=[document_id], queue="matching")
     logger.info(f"Queued shipment matching for {document_id}")
+
+    # Chain to field extraction
+    from app.agents.field_extractor.tasks import extract_fields_task
+    extract_fields_task.apply_async(args=[document_id], queue="classification")
+    logger.info(f"Queued field extraction for {document_id}")

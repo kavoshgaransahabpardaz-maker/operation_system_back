@@ -10,6 +10,9 @@ from app.modules.document_classification.router import router as classification_
 from app.modules.email_integration.router import router as email_router
 from app.modules.shipment_identification.router import router as shipment_router
 from app.modules.shipment_workspace.router import router as workspace_router
+from app.modules.field_extraction.router import router as field_extraction_router
+from app.modules.flags.router import router as flags_router
+from app.modules.org_settings.router import router as org_settings_router
 
 
 @asynccontextmanager
@@ -41,6 +44,9 @@ app.include_router(classification_router, prefix=API_PREFIX)
 app.include_router(email_router, prefix=API_PREFIX)
 app.include_router(shipment_router, prefix=API_PREFIX)
 app.include_router(workspace_router, prefix=API_PREFIX)
+app.include_router(field_extraction_router, prefix=API_PREFIX)
+app.include_router(flags_router, prefix=API_PREFIX)
+app.include_router(org_settings_router, prefix=API_PREFIX)
 
 
 @app.get("/health")
