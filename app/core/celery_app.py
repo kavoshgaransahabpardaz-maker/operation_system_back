@@ -11,6 +11,7 @@ celery_app = Celery(
         "app.agents.email_collector.tasks",
         "app.agents.document_classifier.tasks",
         "app.agents.shipment_matcher.tasks",
+        "app.agents.intel_collector.tasks",
     ],
 )
 
@@ -29,6 +30,10 @@ celery_app.conf.update(
         "sync-all-mailboxes": {
             "task": "app.agents.email_collector.tasks.sync_all_mailboxes",
             "schedule": crontab(minute="*/5"),
+        },
+        "poll-intel-sources": {
+            "task": "tasks.poll_all_sources",
+            "schedule": crontab(minute=0),  # every hour
         },
     },
 )

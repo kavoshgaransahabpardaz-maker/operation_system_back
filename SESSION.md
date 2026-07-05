@@ -69,13 +69,15 @@ AI-powered customs brokerage backend. Automatically ingests documents from email
 - [x] Track A: Suggestion heuristics (app/modules/mismatch/suggestions.py) + GET /flags/{id}/suggestions
 - [x] Track A: Shipment status machine (compute_shipment_status, auto_update_shipment_status)
 - [x] Track A: Enhanced dashboard (open_flags_critical/warning, pending_field_reviews, attention_queue)
-- [ ] Generate Alembic migration for new tables (extracted_fields, flags, flag_resolutions, org_settings, product_records)
+- [x] Track B: Trade Intelligence Module (intel models, source adapters, enrichment, matcher, sanctions screening, alerts, router, Celery tasks)
+- [ ] Generate Alembic migration for new tables (extracted_fields, flags, flag_resolutions, org_settings, product_records, intel_sources, intel_articles, intel_enrichments, intel_matches, user_interests, alert_deliveries)
 - [ ] Gmail + Microsoft OAuth flows (stubs in email router, need full OAuth callback impl)
 - [ ] Tests
 
 ### What Was Done This Session (2026-07-03)
 
 Implemented all 9 Track A missing features for the BrokerAI FastAPI backend.
+Implemented Track B: Trade Intelligence Module — source adapters (RSS + sanctions), LLM enrichment, pure-Python matcher, sanctions screening via fuzzy names_match, alert delivery, 9 REST endpoints, Celery beat schedule.
 
 ### Recent File Changes
 | File | Change | Reason |
@@ -128,6 +130,21 @@ Implemented all 9 Track A missing features for the BrokerAI FastAPI backend.
 | docs/modules/ai_email_collector.md | Created | AI Agent 1 documented |
 | docs/modules/ai_document_classifier.md | Created | AI Agent 2 documented |
 | docs/modules/ai_shipment_matcher.md | Created | AI Agent 3 documented |
+| app/modules/intel/models.py | Created | IntelSource, IntelArticle, IntelEnrichment, IntelMatch, UserInterest, AlertDelivery ORM models |
+| app/modules/intel/sources/base.py | Created | BaseSourceAdapter ABC, RawArticle dataclass, BUILTIN_SOURCES, seed_builtin_sources() |
+| app/modules/intel/sources/rss_adapter.py | Created | RssAdapter — feedparser + httpx |
+| app/modules/intel/sources/sanctions_adapter.py | Created | SanctionsAdapter — UK OFSI JSON format |
+| app/modules/intel/enrichment.py | Created | enrich_article() + generate_embedding() via OpenAI |
+| app/modules/intel/matcher.py | Created | match_article_to_shipments() + seed_org_interests() — pure Python, no LLM |
+| app/modules/intel/sanctions.py | Created | screen_shipment_parties() — fuzzy matching against sanctions list entries |
+| app/modules/intel/alerts.py | Created | send_alert() — creates AlertDelivery + activity log |
+| app/modules/intel/schemas.py | Created | Pydantic schemas: IntelSourceOut, IntelArticleOut, IntelEnrichmentOut, IntelMatchOut, IntelFeedItem, UserInterestOut/Create, AlertDeliveryOut |
+| app/modules/intel/router.py | Created | 9 endpoints under /api/v1/intel |
+| app/agents/intel_collector/tasks.py | Created | poll_all_sources, poll_intel_source, enrich_and_match_article Celery tasks |
+| app/core/celery_app.py | Modified | Added intel_collector to include list; added poll-intel-sources beat schedule |
+| app/main.py | Modified | Added intel router import + include; seed_builtin_sources() in lifespan |
+| app/agents/field_extractor/tasks.py | Modified | Added screen_shipment_parties() call in run_comparison_task |
+| requirements.txt | Modified | Added feedparser==6.0.11 |
 
 ---
 
