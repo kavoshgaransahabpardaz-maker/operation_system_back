@@ -23,7 +23,17 @@
       "Bash(rtk git:*)",
       "Bash(git commit -m ':*)",
       "Bash(git add:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(git -C /Users/behnam/vscode/operating_system_cb_back ls-files .env.production)",
+      "Bash(git -C /Users/behnam/vscode/operating_system_cb_back rm --cached .env.production)",
+      "Bash(rtk tree:*)",
+      "Bash(git -C /Users/behnam/vscode/operating_system_cb_back add docs/FRONTEND_SPEC.md)",
+      "Bash(git -C /Users/behnam/vscode/operating_system_cb_back commit -m ':*)",
+      "Bash(git -C /Users/behnam/vscode/operating_system_cb_back push)",
+      "Bash(rtk find:*)",
+      "Bash(git init:*)",
+      "Bash(python3 -m py_compile app/core/celery_app.py)",
+      "Bash(python3 -m py_compile app/agents/field_extractor/tasks.py)"
     ],
     "additionalDirectories": [
       "/Users/behnam/vscode/veritariffai-back"
