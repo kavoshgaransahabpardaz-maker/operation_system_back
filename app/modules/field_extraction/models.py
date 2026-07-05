@@ -9,6 +9,33 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 
 
+class ProductRecord(Base):
+    """Structured product/line-item data harvested from trade documents."""
+
+    __tablename__ = "product_records"
+    __table_args__ = (
+        Index("ix_product_records_org_id", "org_id"),
+        Index("ix_product_records_description_hash", "description_hash"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    shipment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("shipments.id"), nullable=True
+    )
+    hs_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    stated_origin: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    description_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    description_raw: Mapped[str | None] = mapped_column(Text, nullable=True)
+    incoterm: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
 class ExtractedFieldStatus(str, enum.Enum):
     EXTRACTED = "extracted"
     CONFIRMED = "confirmed"

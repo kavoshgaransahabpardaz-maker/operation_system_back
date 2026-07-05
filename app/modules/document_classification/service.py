@@ -18,16 +18,19 @@ from app.modules.ocr_processing.models import OcrResult
 CONFIDENCE_REVIEW_THRESHOLD = 0.70
 
 _SYSTEM_PROMPT = """You are a customs brokerage expert. Classify the document into exactly one of these types:
-- commercial_invoice
-- packing_list
-- bill_of_lading
-- air_waybill
-- certificate_of_origin
-- insurance_certificate
-- customs_declaration
-- purchase_order
-- delivery_order
-- other
+- commercial_invoice: Seller's invoice listing goods, prices, and trade terms
+- packing_list: Itemised list of packages, weights, and dimensions
+- bill_of_lading: Ocean carrier's receipt and contract of carriage
+- air_waybill: Air carrier's receipt and contract of carriage (AWB)
+- certificate_of_origin: Official document certifying country of manufacture
+- insurance_certificate: Cargo insurance coverage document
+- customs_declaration: Import/export declaration filed with customs authorities
+- purchase_order: Buyer's order document to the supplier
+- delivery_order: Instruction to release/deliver goods from a carrier or warehouse
+- mill_certificate: Manufacturer's quality/test certificate for raw materials (e.g. steel, metals)
+- suppliers_declaration: Exporter's statement of origin for preferential tariff purposes (EUR.1 equivalent)
+- cmr: CMR road consignment note (international road freight contract)
+- other: Any document that does not fit the above categories
 
 Respond ONLY with a JSON object in this exact format:
 {"doc_type": "<type>", "confidence": <0.0-1.0>}"""

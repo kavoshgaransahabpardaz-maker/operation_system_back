@@ -46,9 +46,20 @@ class ShipmentDetail(BaseModel):
     documents: list[DocumentSummary]
 
 
+class AttentionShipment(BaseModel):
+    id: uuid.UUID
+    short_id: str
+    flag_count: int
+
+
 class DashboardStats(BaseModel):
     total_shipments: int
     documents_imported_today: int
     unclassified_documents: int
     shipments_requiring_review: int
     recent_email_imports: list[RecentEmailOut]
+    # Enhanced fields
+    open_flags_critical: int = 0
+    open_flags_warning: int = 0
+    pending_field_reviews: int = 0
+    attention_queue: list[AttentionShipment] = []

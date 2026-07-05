@@ -19,6 +19,9 @@ class DocumentType(str, enum.Enum):
     CUSTOMS_DECLARATION = "customs_declaration"
     PURCHASE_ORDER = "purchase_order"
     DELIVERY_ORDER = "delivery_order"
+    MILL_CERTIFICATE = "mill_certificate"
+    SUPPLIERS_DECLARATION = "suppliers_declaration"
+    CMR = "cmr"
     OTHER = "other"
 
 

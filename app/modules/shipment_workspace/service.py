@@ -7,8 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.document_classification.models import ClassificationResult
 from app.modules.document_storage.models import Document, DocumentStatus
 from app.modules.email_integration.models import EmailAttachment, EmailRecord, MailboxConnection
+from app.modules.field_extraction.models import ExtractedField, ExtractedFieldStatus
+from app.modules.flags.models import Flag, FlagSeverity, FlagStatus
 from app.modules.shipment_identification.models import Shipment, ShipmentReference
 from app.modules.shipment_workspace.schemas import (
+    AttentionShipment,
     DashboardStats,
     DocumentSummary,
     RecentEmailOut,
@@ -134,10 +137,71 @@ async def get_dashboard_stats(db: AsyncSession, org_id: uuid.UUID) -> DashboardS
             attachment_count=att_count,
         ))
 
+    # --- Enhanced fields ---
+
+    # Count open critical flags
+    critical_flags_result = await db.execute(
+        select(func.count()).select_from(Flag).where(
+            Flag.org_id == org_id,
+            Flag.status == FlagStatus.OPEN,
+            Flag.severity == FlagSeverity.CRITICAL,
+        )
+    )
+    open_flags_critical = critical_flags_result.scalar() or 0
+
+    # Count open warning flags
+    warning_flags_result = await db.execute(
+        select(func.count()).select_from(Flag).where(
+            Flag.org_id == org_id,
+            Flag.status == FlagStatus.OPEN,
+            Flag.severity == FlagSeverity.WARNING,
+        )
+    )
+    open_flags_warning = warning_flags_result.scalar() or 0
+
+    # Count extracted fields with status='extracted' and confidence < 0.70
+    pending_reviews_result = await db.execute(
+        select(func.count()).select_from(ExtractedField).where(
+            ExtractedField.org_id == org_id,
+            ExtractedField.status == ExtractedFieldStatus.EXTRACTED,
+            ExtractedField.confidence < 0.70,
+        )
+    )
+    pending_field_reviews = pending_reviews_result.scalar() or 0
+
+    # Attention queue: up to 5 shipments with open critical flags
+    # Get shipment_ids that have open critical flags
+    critical_ship_result = await db.execute(
+        select(Flag.shipment_id, func.count(Flag.id).label("flag_count"))
+        .where(
+            Flag.org_id == org_id,
+            Flag.status == FlagStatus.OPEN,
+            Flag.severity == FlagSeverity.CRITICAL,
+        )
+        .group_by(Flag.shipment_id)
+        .order_by(func.count(Flag.id).desc())
+        .limit(5)
+    )
+    attention_queue: list[AttentionShipment] = []
+    for row in critical_ship_result:
+        ship_id = row[0]
+        flag_count = row[1]
+        # short_id: first 8 chars of the UUID
+        short_id = str(ship_id)[:8]
+        attention_queue.append(AttentionShipment(
+            id=ship_id,
+            short_id=short_id,
+            flag_count=flag_count,
+        ))
+
     return DashboardStats(
         total_shipments=total_shipments,
         documents_imported_today=documents_imported_today,
         unclassified_documents=unclassified_documents,
         shipments_requiring_review=shipments_requiring_review,
         recent_email_imports=recent_emails,
+        open_flags_critical=open_flags_critical,
+        open_flags_warning=open_flags_warning,
+        pending_field_reviews=pending_field_reviews,
+        attention_queue=attention_queue,
     )

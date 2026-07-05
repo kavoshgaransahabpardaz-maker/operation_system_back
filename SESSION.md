@@ -1,16 +1,16 @@
 ---
-session_id: 2026-06-28-001
-last_updated: 2026-06-28
+session_id: 2026-07-03-001
+last_updated: 2026-07-03
 ---
 
 # Session Log
 
-## Current Session: 2026-06-28-001
+## Current Session: 2026-07-03-001
 
 ### Context
 - Project: operating_system_cb_back — **BrokerAI** (Intelligent Customs Brokerage Document Platform)
-- Status: Architecture planned, no code written yet
-- Active task: PRD analyzed; all 7 modules + 3 AI agents documented; ready to build
+- Status: Track A features implemented
+- Active task: Implemented 9 Track A features (product records, new doc types, tabular ingestion, matcher fallback, missing-field/doc flags, suggestion heuristics, status machine, enhanced dashboard)
 
 ### Product Summary
 AI-powered customs brokerage backend. Automatically ingests documents from email, classifies them, groups by shipment, and provides a workspace dashboard.
@@ -60,14 +60,40 @@ AI-powered customs brokerage backend. Automatically ingests documents from email
 - [x] Add new ActivityAction values (FIELD_EXTRACTED, FIELD_CONFIRMED, FIELD_CORRECTED, FLAG_CREATED, FLAG_RESOLVED, COMPARISON_RUN, SETTINGS_UPDATED)
 - [x] Register 3 new routers in main.py
 - [x] Add rapidfuzz==3.10.1 to requirements.txt
-- [ ] Generate Alembic migration for new tables (extracted_fields, flags, flag_resolutions, org_settings)
+- [x] Track A: ProductRecord model in field_extraction/models.py
+- [x] Track A: Add mill_certificate, suppliers_declaration, cmr to DocumentType + updated prompt
+- [x] Track A: Tabular ingestion (app/modules/document_storage/tabular.py) + openpyxl/lxml deps
+- [x] Track A: Shipment matcher party+date fallback (_fallback_match_by_party_and_date_sync)
+- [x] Track A: Missing-field flags (REQUIRED_FIELDS_BY_DOC_TYPE + create_missing_field_flags)
+- [x] Track A: Missing-document flags (SHIPMENT_PROFILES + create_missing_document_flags)
+- [x] Track A: Suggestion heuristics (app/modules/mismatch/suggestions.py) + GET /flags/{id}/suggestions
+- [x] Track A: Shipment status machine (compute_shipment_status, auto_update_shipment_status)
+- [x] Track A: Enhanced dashboard (open_flags_critical/warning, pending_field_reviews, attention_queue)
+- [ ] Generate Alembic migration for new tables (extracted_fields, flags, flag_resolutions, org_settings, product_records)
 - [ ] Gmail + Microsoft OAuth flows (stubs in email router, need full OAuth callback impl)
 - [ ] Tests
+
+### What Was Done This Session (2026-07-03)
+
+Implemented all 9 Track A missing features for the BrokerAI FastAPI backend.
 
 ### Recent File Changes
 | File | Change | Reason |
 |------|--------|---------|
-| SESSION.md | Created | Session management setup |
+| SESSION.md | Updated | Session 2026-07-03-001 |
+| app/modules/field_extraction/models.py | Added ProductRecord ORM model | Track A feature 1 |
+| app/modules/document_classification/models.py | Added mill_certificate, suppliers_declaration, cmr to DocumentType | Track A feature 2 |
+| app/modules/document_classification/service.py | Updated OpenAI prompt with new doc types + descriptions | Track A feature 2 |
+| app/modules/document_storage/tabular.py | Created — parse_tabular(), is_tabular() for XLS/CSV/XML | Track A feature 3 |
+| requirements.txt | Added openpyxl==3.1.5, lxml==5.3.0 | Track A feature 3 |
+| app/agents/document_classifier/tasks.py | Added tabular path (skip OCR, store as OcrResult language=tabular) | Track A feature 3 |
+| app/modules/shipment_identification/service.py | Added _fallback_match_by_party_and_date_sync, compute_shipment_status, auto_update_shipment_status | Track A features 4 + 8 |
+| app/modules/flags/service.py | Added REQUIRED_FIELDS_BY_DOC_TYPE, SHIPMENT_PROFILES, create_missing_field_flags, create_missing_document_flags; auto_update_shipment_status call after resolve_flag | Track A features 5 + 6 |
+| app/modules/mismatch/suggestions.py | Created — Suggestion dataclass, generate_suggestions() (pure Python) | Track A feature 7 |
+| app/modules/flags/router.py | Added GET /flags/{flag_id}/suggestions endpoint | Track A feature 7 |
+| app/agents/field_extractor/tasks.py | Wired create_missing_field_flags + create_missing_document_flags + auto_update_shipment_status into pipeline | Track A features 5 + 6 + 8 |
+| app/modules/shipment_workspace/schemas.py | Added AttentionShipment, extended DashboardStats with 4 new fields | Track A feature 9 |
+| app/modules/shipment_workspace/service.py | Populated new dashboard fields (flag counts, pending reviews, attention queue) | Track A feature 9 |
 | app/modules/field_extraction/models.py | Created | ExtractedField ORM model |
 | app/modules/field_extraction/schemas.py | Created | FieldName enum, Pydantic schemas |
 | app/modules/field_extraction/validators.py | Created | Pure validation functions |
