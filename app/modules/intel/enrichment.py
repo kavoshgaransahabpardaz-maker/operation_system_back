@@ -35,6 +35,19 @@ Analyze the article and respond ONLY with a JSON object with exactly these keys:
 - regulation_refs: list of regulation reference strings (e.g. "EU 2024/123") — only when explicitly mentioned
 - impact_score: integer 1-5 where 1=informational, 5=immediate action required for affected traders
 - impact_rationale: string, 1-2 sentences explaining the impact score
+- industries: list of industry strings (e.g. ["steel", "automotive", "agriculture"])
+- companies: list of company names mentioned in the article
+- commodities: list of commodity strings (e.g. ["steel", "wheat", "oil"])
+- topics: list of trade topic strings (e.g. ["anti-dumping", "safeguard", "quota"])
+- trade_agreements: list of trade agreement names (e.g. ["CPTPP", "UK-EU TCA"])
+- ports: list of port names mentioned
+- currencies: list of ISO 4217 currency codes mentioned (e.g. ["USD", "EUR"])
+- severity: one of low, medium, high, critical
+- urgency: one of informational, monitor, act_soon, immediate
+- supply_chain_impact: string (brief description) or null if not applicable
+- price_effect: one of positive, negative, neutral, unknown
+- affected_industries: list of industries impacted by this event
+- affected_countries: list of ISO 3166-1 alpha-2 codes of countries impacted
 """
 
 
@@ -47,6 +60,20 @@ class EnrichmentResult(BaseModel):
     regulation_refs: list[str]
     impact_score: int
     impact_rationale: str
+    # Extended fields
+    industries: list[str] = []
+    companies: list[str] = []
+    commodities: list[str] = []
+    topics: list[str] = []
+    trade_agreements: list[str] = []
+    ports: list[str] = []
+    currencies: list[str] = []
+    severity: str = "low"
+    urgency: str = "informational"
+    supply_chain_impact: str | None = None
+    price_effect: str | None = "unknown"
+    affected_industries: list[str] = []
+    affected_countries: list[str] = []
 
     @field_validator("event_type")
     @classmethod
@@ -61,6 +88,24 @@ class EnrichmentResult(BaseModel):
     @classmethod
     def validate_impact_score(cls, v: int) -> int:
         return max(1, min(5, v))
+
+    @field_validator("severity")
+    @classmethod
+    def validate_severity(cls, v: str) -> str:
+        allowed = {"low", "medium", "high", "critical"}
+        return v if v in allowed else "low"
+
+    @field_validator("urgency")
+    @classmethod
+    def validate_urgency(cls, v: str) -> str:
+        allowed = {"informational", "monitor", "act_soon", "immediate"}
+        return v if v in allowed else "informational"
+
+    @field_validator("price_effect")
+    @classmethod
+    def validate_price_effect(cls, v: str | None) -> str | None:
+        allowed = {"positive", "negative", "neutral", "unknown", None}
+        return v if v in allowed else "unknown"
 
 
 async def enrich_article(article) -> tuple[EnrichmentResult, str]:
@@ -111,3 +156,52 @@ async def generate_embedding(text: str) -> list[float]:
         dimensions=_EMBEDDING_DIMS,
     )
     return response.data[0].embedding
+
+
+async def save_article_tags(
+    article_id: uuid.UUID,
+    enrichment: EnrichmentResult,
+    db,
+) -> None:
+    """
+    Create ArticleTag rows for all enrichment fields that carry tag data.
+
+    Tags created:
+    - countries         → tag_type='country'
+    - industries        → tag_type='industry'
+    - companies         → tag_type='company'
+    - commodities       → tag_type='commodity'
+    - hs_chapters       → tag_type='hs_code'
+    - hs_headings       → tag_type='hs_code'
+    - topics            → tag_type='topic'
+    - trade_agreements  → tag_type='trade_agreement'
+    - ports             → tag_type='port'
+    - currencies        → tag_type='currency'
+    """
+    from app.modules.intel.models import ArticleTag
+
+    tag_groups: list[tuple[str, list[str]]] = [
+        ("country", enrichment.countries),
+        ("industry", enrichment.industries),
+        ("company", enrichment.companies),
+        ("commodity", enrichment.commodities),
+        ("hs_code", enrichment.hs_chapters),
+        ("hs_code", enrichment.hs_headings),
+        ("topic", enrichment.topics),
+        ("trade_agreement", enrichment.trade_agreements),
+        ("port", enrichment.ports),
+        ("currency", enrichment.currencies),
+    ]
+
+    for tag_type, values in tag_groups:
+        for value in (values or []):
+            if not value or not value.strip():
+                continue
+            tag = ArticleTag(
+                article_id=article_id,
+                tag=value.strip(),
+                tag_type=tag_type,
+            )
+            db.add(tag)
+
+    # Don't commit here — caller manages the transaction

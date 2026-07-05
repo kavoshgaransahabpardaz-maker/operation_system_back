@@ -134,7 +134,7 @@ services:
     command: >
       celery -A app.core.celery_app worker
       --loglevel=warning
-      -Q default,email,classification,matching
+      -Q default,email,classification,matching,intel_collect,intel_parse,intel_enrich,intel_notify
       --concurrency=4
       --max-tasks-per-child=200
     depends_on:
