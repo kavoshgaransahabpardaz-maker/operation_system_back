@@ -377,16 +377,6 @@ export type AlertDeliveryType = 'email' | 'in_app';
 
 export type AlertDeliveryStatus = 'sent' | 'failed';
 
-export interface IntelArticle {
-  id: string;
-  source_id: string;
-  url: string | null;
-  title: string;
-  content_raw: string;
-  published_at: string | null;
-  ingested_at: string;
-}
-
 export interface IntelEnrichment {
   id: string;
   article_id: string;
@@ -400,6 +390,20 @@ export interface IntelEnrichment {
   impact_rationale: string | null;
   model_version: string;
   enriched_at: string;
+  // Extended fields
+  industries: string[] | null;
+  companies: string[] | null;
+  commodities: string[] | null;
+  topics: string[] | null;
+  trade_agreements: string[] | null;
+  ports: string[] | null;
+  currencies: string[] | null;
+  severity: string | null;         // low / medium / high / critical
+  urgency: string | null;          // immediate / short_term / long_term
+  supply_chain_impact: string | null;
+  price_effect: string | null;     // increase / decrease / neutral / unknown
+  affected_industries: string[] | null;
+  affected_countries: string[] | null;
 }
 
 export interface IntelMatch {
@@ -419,16 +423,109 @@ export interface IntelFeedItem {
   match_reason: string | null;     // top match reason for this org
 }
 
+export interface IntelArticle {
+  id: string;
+  source_id: string;
+  url: string | null;
+  title: string;
+  content_raw: string;
+  published_at: string | null;
+  ingested_at: string;
+  language: string | null;         // ISO language code e.g. "en"
+  author: string | null;
+  image_url: string | null;
+  word_count: number | null;
+  is_duplicate: boolean;
+  processing_status: 'raw' | 'parsed' | 'enriched' | 'failed';
+}
+
 export interface IntelSource {
   id: string;
   name: string;
   source_type: string | null;      // rss / scraper / api / sanctions_list
+  category: string | null;         // tariff / sanctions / regulation / trade_news
   url: string;
   poll_cadence_minutes: number;
   is_active: boolean;
   last_polled_at: string | null;
   last_error: string | null;
+  health_status: string;           // unknown / healthy / degraded / dead
+  articles_collected: number;
+  priority: number;                // lower = polled first
+  config: Record<string, unknown> | null;
   created_at: string;
+}
+
+export interface IntelJob {
+  id: string;
+  source_id: string | null;
+  job_type: string;
+  status: 'pending' | 'running' | 'done' | 'failed';
+  articles_processed: number;
+  error_message: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface TrendingTopic {
+  id: string;
+  topic: string;
+  topic_type: string;              // hs_chapter / country / event_type / commodity
+  article_count: number;
+  period_start: string;            // YYYY-MM-DD
+  period_end: string;
+  created_at: string;
+}
+
+export interface KnowledgeRelation {
+  id: string;
+  subject_type: string;            // country / hs_code / company / regulation
+  subject_value: string;
+  predicate: string;               // affects / references / applies_to / etc.
+  object_type: string;
+  object_value: string;
+  article_id: string | null;
+  confidence: number;              // 0.0–1.0
+  created_at: string;
+}
+
+export interface NotificationPreference {
+  id: string;
+  org_id: string;
+  user_id: string;
+  min_impact_score: number;        // 1–5; articles below this are not alerted
+  event_types: IntelEventType[];   // empty = all event types
+  delivery_channels: ('email' | 'in_app')[];
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface HeatmapEntry {
+  country: string;                 // ISO country code
+  article_count: number;
+}
+
+export interface EventTypeCount {
+  event_type: IntelEventType;
+  article_count: number;
+}
+
+export interface ImpactTimelineEntry {
+  date: string;                    // YYYY-MM-DD
+  avg_impact_score: number;
+  article_count: number;
+}
+
+export interface SearchResult {
+  article_id: string;
+  title: string;
+  url: string | null;
+  published_at: string | null;
+  ingested_at: string | null;
+  processing_status: string;
+  rank: number;                    // FTS rank score
+  match_source: string;            // 'fts' | 'tag'
 }
 
 export interface UserInterest {
@@ -674,12 +771,64 @@ export const intelApi = {
   listAlerts: (limit = 50) =>
     apiClient.get<AlertDelivery[]>('/api/v1/intel/alerts', { params: { limit } }),
 
+  // Tags autocomplete for search UI
+  tagsAutocomplete: (prefix: string) =>
+    apiClient.get<string[]>('/api/v1/intel/tags/autocomplete', { params: { prefix } }),
+
+  // Notification preferences
+  getNotificationPreferences: () =>
+    apiClient.get<NotificationPreference>('/api/v1/intel/notifications/preferences'),
+
+  updateNotificationPreferences: (data: Partial<Pick<NotificationPreference, 'min_impact_score' | 'event_types' | 'delivery_channels' | 'is_active'>>) =>
+    apiClient.patch<NotificationPreference>('/api/v1/intel/notifications/preferences', data),
+
+  // Analytics
+  trendingTopics: (params?: { limit?: number; topic_type?: string }) =>
+    apiClient.get<TrendingTopic[]>('/api/v1/intel/analytics/trending', { params }),
+
+  countryHeatmap: (days = 30) =>
+    apiClient.get<HeatmapEntry[]>('/api/v1/intel/analytics/heatmap', { params: { days } }),
+
+  byEventType: (days = 30) =>
+    apiClient.get<EventTypeCount[]>('/api/v1/intel/analytics/by-event-type', { params: { days } }),
+
+  impactTimeline: (days = 30) =>
+    apiClient.get<ImpactTimelineEntry[]>('/api/v1/intel/analytics/impact-timeline', { params: { days } }),
+
+  // Knowledge graph
+  knowledgeGraph: (subjectType: string, subjectValue: string) =>
+    apiClient.get<KnowledgeRelation[]>('/api/v1/intel/knowledge-graph', {
+      params: { subject_type: subjectType, subject_value: subjectValue },
+    }),
+
   // Admin — source management
   listSources: () => apiClient.get<IntelSource[]>('/api/v1/intel/sources'),
+
+  createSource: (data: {
+    name: string; source_type?: string; category?: string;
+    url: string; poll_cadence_minutes?: number; is_active?: boolean;
+    priority?: number; config?: Record<string, unknown>;
+  }) => apiClient.post<IntelSource>('/api/v1/intel/sources', data),
+
+  updateSource: (sourceId: string, data: Partial<IntelSource>) =>
+    apiClient.patch<IntelSource>(`/api/v1/intel/sources/${sourceId}`, data),
+
+  deactivateSource: (sourceId: string) =>
+    apiClient.delete(`/api/v1/intel/sources/${sourceId}`),
 
   pollSource: (sourceId: string) =>
     apiClient.post<{ status: string; source_id: string; source_name: string }>(
       `/api/v1/intel/sources/${sourceId}/poll`
+    ),
+
+  // Admin — jobs
+  listJobs: (params?: { limit?: number; status?: string; job_type?: string }) =>
+    apiClient.get<IntelJob[]>('/api/v1/intel/jobs', { params }),
+
+  // Admin — reprocess
+  reprocessArticle: (articleId: string) =>
+    apiClient.post<{ status: string; article_id: string; title: string }>(
+      `/api/v1/intel/admin/reprocess/${articleId}`
     ),
 };
 ```
@@ -889,7 +1038,12 @@ Use `createBrowserRouter` with the following route tree.
 | `/intel/search` | `IntelSearchPage` | Yes | NEW |
 | `/intel/articles/:id` | `IntelArticlePage` | Yes | NEW |
 | `/intel/alerts` | `IntelAlertsPage` | Yes | NEW |
+| `/intel/interests` | `IntelInterestsPage` | Yes | NEW — manage interest profile |
+| `/intel/analytics` | `IntelAnalyticsPage` | Yes | NEW — trending, heatmap, impact timeline |
+| `/intel/knowledge-graph` | `IntelKnowledgeGraphPage` | Yes | NEW — explore entity relationships |
+| `/intel/notifications` | `IntelNotificationsPage` | Yes | NEW — notification preferences |
 | `/intel/sources` | `IntelSourcesPage` | Yes | Admin only — NEW |
+| `/intel/jobs` | `IntelJobsPage` | Yes | Admin only — NEW — pipeline job history |
 
 Wrap all authenticated routes in an `AuthGuard` component that reads `localStorage.access_token` and redirects to `/login` if missing.
 
@@ -1772,3 +1926,114 @@ HS Chapters       HS Headings       Countries        Party Names
 - On success: invalidate interests query, toast "Interest added"
 
 **Delete**: clicking × on an explicit interest → `DELETE /api/v1/intel/interests/:id` → toast "Interest removed"
+
+---
+
+### 17.8 Intel Analytics Page (`/intel/analytics`)
+
+Three charts with a shared date-range selector (7 / 30 / 90 / 365 days).
+
+**Country Heatmap** — calls `GET /api/v1/intel/analytics/heatmap?days=N`
+- World map or, simpler, a horizontal bar chart ranked by `article_count`
+- Each bar shows flag + ISO code + count
+- Clicking a country filters the feed by that country
+
+**By Event Type** — calls `GET /api/v1/intel/analytics/by-event-type?days=N`
+- Donut or bar chart; colour from `INTEL_EVENT_TYPE_COLORS`
+- Legend below with count labels
+
+**Impact Timeline** — calls `GET /api/v1/intel/analytics/impact-timeline?days=N`
+- Line chart: x = date, y = avg_impact_score (1–5)
+- Secondary bars: article_count per day on y2 axis
+
+**Trending Topics** — calls `GET /api/v1/intel/analytics/trending`
+- Tag cloud or table; `topic_type` filter chips (hs_chapter / country / event_type / commodity)
+- Each topic links to intel search for that term
+
+---
+
+### 17.9 Knowledge Graph Page (`/intel/knowledge-graph`)
+
+An interactive node-link graph (use `react-force-graph` or similar; fallback to a table for simple cases).
+
+**Search panel** (left):
+- `subject_type` select: country / hs_code / company / regulation
+- `subject_value` text input with autocomplete from `GET /api/v1/intel/tags/autocomplete?prefix=…`
+- "Explore" button → `GET /api/v1/intel/knowledge-graph?subject_type=…&subject_value=…`
+
+**Graph canvas** (right):
+- Nodes: subject (blue) + related objects (colour by `object_type`)
+- Edges labelled with `predicate`
+- Clicking a node sets it as the new subject and re-queries
+- `confidence` displayed on edge hover
+
+**Table fallback**: if fewer than 10 nodes, render a simple table of (subject → predicate → object) rows with `article_id` link.
+
+---
+
+### 17.10 Notification Preferences Page (`/intel/notifications`)
+
+Calls `GET /api/v1/intel/notifications/preferences` on load.
+
+**Form**:
+- **Min Impact Score** — slider 1–5 with label e.g. "Notify me for impact ≥ 3"
+- **Event Types** — multi-select checkboxes (all event types from `INTEL_EVENT_TYPE_LABELS`); empty = all
+- **Delivery Channels** — checkboxes: Email, In-App
+- **Active** — toggle switch
+
+**Save** → `PATCH /api/v1/intel/notifications/preferences` with changed fields only → toast "Preferences saved"
+
+---
+
+### 17.11 Intel Sources Page — Extended (Admin only)
+
+Extends section 17.5 with full CRUD:
+
+**Add Source** button → opens `AddSourceDialog`:
+- name, source_type (select), category (select), url, poll_cadence_minutes (number), is_active (toggle), priority (1–10)
+- Submit → `POST /api/v1/intel/sources`
+
+**Edit Source** (pencil icon per row) → `AddSourceDialog` pre-filled → `PATCH /api/v1/intel/sources/:id`
+
+**Deactivate** (trash icon) → confirm dialog → `DELETE /api/v1/intel/sources/:id` (soft-delete, sets `is_active=false`)
+
+**Extended table columns** (add to existing):
+| Column | Notes |
+|---|---|
+| Category | tariff / sanctions / regulation / trade_news badge |
+| Health | health_status badge: green "healthy" / amber "degraded" / red "dead" / gray "unknown" |
+| Articles | `articles_collected` count |
+| Priority | small number badge |
+
+---
+
+### 17.12 Intel Jobs Page (`/intel/jobs`) — Admin only
+
+Calls `GET /api/v1/intel/jobs?limit=100`.
+
+**Filter chips**: All / Pending / Running / Done / Failed  
+**Filter by type**: all / collect / parse / enrich / notify
+
+**Table**:
+| Column | Notes |
+|---|---|
+| Created | Relative time |
+| Source | source_id link to sources page |
+| Type | job_type badge |
+| Status | colour-coded badge |
+| Articles | articles_processed count |
+| Duration | completed_at − started_at (human-readable) |
+| Error | truncated error_message with expand tooltip |
+
+**Reprocess** button appears on rows with `status=failed` + `job_type=enrich` → `POST /api/v1/intel/admin/reprocess/:article_id`
+
+---
+
+### 17.13 Intel Source Health Dashboard (embedded in 17.11)
+
+Summary row above the sources table:
+- Total active sources
+- Healthy / Degraded / Dead counts
+- Articles ingested last 24h (sum of recent IntelJob `articles_processed`)
+
+Use distinct card chips with coloured borders for quick at-a-glance status.
