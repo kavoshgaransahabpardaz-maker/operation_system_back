@@ -70,14 +70,16 @@ AI-powered customs brokerage backend. Automatically ingests documents from email
 - [x] Track A: Shipment status machine (compute_shipment_status, auto_update_shipment_status)
 - [x] Track A: Enhanced dashboard (open_flags_critical/warning, pending_field_reviews, attention_queue)
 - [x] Track B: Trade Intelligence Module (intel models, source adapters, enrichment, matcher, sanctions screening, alerts, router, Celery tasks)
-- [ ] Generate Alembic migration for new tables (extracted_fields, flags, flag_resolutions, org_settings, product_records, intel_sources, intel_articles, intel_enrichments, intel_matches, user_interests, alert_deliveries)
+- [ ] Generate Alembic migration for new tables on server (intel_sources extended, intel_articles extended, ArticleTag, Company, ArticleCompany, KnowledgeRelation, TrendingTopic, IntelJob, NotificationPreference)
 - [ ] Gmail + Microsoft OAuth flows (stubs in email router, need full OAuth callback impl)
 - [ ] Tests
 
-### What Was Done This Session (2026-07-03)
+### What Was Done This Session (2026-07-03 — continued)
 
 Implemented all 9 Track A missing features for the BrokerAI FastAPI backend.
 Implemented Track B: Trade Intelligence Module — source adapters (RSS + sanctions), LLM enrichment, pure-Python matcher, sanctions screening via fuzzy names_match, alert delivery, 9 REST endpoints, Celery beat schedule.
+Built full enterprise intel pipeline: collectors, parsers, normalizer, deduplicator, knowledge graph, impact engine, recommender, FTS search, analytics endpoints (trending/heatmap/event-type/impact-timeline), notification preferences, admin source CRUD + jobs.
+Updated FRONTEND_SPEC.md with all new intel types, API methods (intelApi extended), routes, and page specs (17.8–17.13).
 
 ### Recent File Changes
 | File | Change | Reason |
@@ -145,6 +147,7 @@ Implemented Track B: Trade Intelligence Module — source adapters (RSS + sancti
 | app/main.py | Modified | Added intel router import + include; seed_builtin_sources() in lifespan |
 | app/agents/field_extractor/tasks.py | Modified | Added screen_shipment_parties() call in run_comparison_task |
 | requirements.txt | Modified | Added feedparser==6.0.11 |
+| docs/FRONTEND_SPEC.md | Updated | Added enterprise intel types, intelApi methods, routes, page specs 17.8–17.13 |
 
 ---
 
