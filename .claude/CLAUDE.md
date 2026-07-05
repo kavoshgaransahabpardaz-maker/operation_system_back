@@ -28,3 +28,7 @@ Update `SESSION.md`:
 ## At End of a Session / Long Task
 - Move the current session block to "Session History" in `SESSION.md` with a one-line summary
 - Start a new session block with a fresh session ID (format: YYYY-MM-DD-NNN)
+
+# Frontend Spec — MANDATORY
+
+Whenever a feature is added, changed, or removed (new endpoint, new model field, changed response shape, new page, new business rule), you MUST update `docs/FRONTEND_SPEC.md` to reflect the change before committing. This keeps the spec in sync with the implementation so the frontend developer always has accurate information.
