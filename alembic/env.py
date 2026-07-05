@@ -13,6 +13,10 @@ import app.modules.document_classification.models  # noqa: F401
 import app.modules.email_integration.models  # noqa: F401
 import app.modules.shipment_identification.models  # noqa: F401
 import app.models.activity_log  # noqa: F401
+import app.modules.field_extraction.models  # noqa: F401
+import app.modules.flags.models  # noqa: F401
+import app.modules.org_settings.models  # noqa: F401
+import app.modules.intel.models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
