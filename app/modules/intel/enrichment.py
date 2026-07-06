@@ -25,29 +25,41 @@ _ENRICHMENT_MODEL = "gpt-4o-mini-2024-07-18"
 _EMBEDDING_MODEL = "text-embedding-3-small"
 _EMBEDDING_DIMS = 1536
 
-_SYSTEM_PROMPT = """You are a trade compliance analyst.
-Analyze the article and respond ONLY with a JSON object with exactly these keys:
-- summary: string, ≤80 words, plain English
-- event_type: one of tariff_change, sanctions, regulation, trade_agreement, market_notice, other
-- countries: list of ISO 3166-1 alpha-2 codes (uppercase) — only countries explicitly named
-- hs_chapters: list of HS chapter strings (2-digit, e.g. "72") — ONLY if explicitly stated in the article, empty list if uncertain
-- hs_headings: list of HS heading strings (4-digit, e.g. "7208") — ONLY if explicitly stated, empty list if uncertain
-- regulation_refs: list of regulation reference strings (e.g. "EU 2024/123") — only when explicitly mentioned
-- impact_score: integer 1-5 where 1=informational, 5=immediate action required for affected traders
-- impact_rationale: string, 1-2 sentences explaining the impact score
-- industries: list of industry strings (e.g. ["steel", "automotive", "agriculture"])
-- companies: list of company names mentioned in the article
-- commodities: list of commodity strings (e.g. ["steel", "wheat", "oil"])
-- topics: list of trade topic strings (e.g. ["anti-dumping", "safeguard", "quota"])
-- trade_agreements: list of trade agreement names (e.g. ["CPTPP", "UK-EU TCA"])
-- ports: list of port names mentioned
-- currencies: list of ISO 4217 currency codes mentioned (e.g. ["USD", "EUR"])
-- severity: one of low, medium, high, critical
-- urgency: one of informational, monitor, act_soon, immediate
-- supply_chain_impact: string (brief description) or null if not applicable
-- price_effect: one of positive, negative, neutral, unknown
-- affected_industries: list of industries impacted by this event
-- affected_countries: list of ISO 3166-1 alpha-2 codes of countries impacted
+_SYSTEM_PROMPT = """You are a trade compliance analyst extracting structured metadata from trade news articles.
+Respond ONLY with a valid JSON object with exactly these keys:
+
+- summary: ≤80 words plain English summary focused on trade impact
+- event_type: MUST be one of these — choose the MOST specific match:
+    * tariff_change — any new/changed import or export duties, anti-dumping measures, countervailing duties, quota changes
+    * sanctions — sanctions lists, asset freezes, export controls, embargoes, denied parties
+    * regulation — customs procedures, compliance requirements, border controls, licensing, product standards, labour law affecting trade
+    * trade_agreement — FTAs, bilateral/multilateral deals, MoUs, negotiations, trade disputes (WTO panels)
+    * market_notice — freight rates, shipping schedules, port congestion, carrier announcements, capacity changes, commodity price movements
+    * other — only use if none of the above apply at all
+- countries: ISO 3166-1 alpha-2 codes (uppercase). Include ALL countries mentioned OR clearly implied (trade routes, ports, company headquarters, product origins). E.g. if the article mentions "Asia-Europe route" include key countries. If "US tariffs on China" include ["US","CN"].
+- hs_chapters: 2-digit HS chapter strings ONLY if explicitly stated (e.g. "72" for steel). Empty list if not mentioned.
+- hs_headings: 4-digit HS heading strings ONLY if explicitly stated. Empty list if not mentioned.
+- regulation_refs: regulation/law reference strings explicitly mentioned (e.g. "EU 2024/123", "Section 232")
+- impact_score: integer 1-5:
+    1 = general background/informational
+    2 = worth monitoring, minor operational impact
+    3 = moderate impact on costs or compliance procedures
+    4 = significant — affects pricing, routing, or compliance for active traders
+    5 = immediate action required (new sanction, emergency tariff, port closure)
+- impact_rationale: 1-2 sentences explaining why this score
+- industries: affected industry sectors (e.g. ["shipping", "steel", "automotive", "agriculture", "energy"])
+- companies: company names mentioned
+- commodities: specific goods/commodities (e.g. ["LNG", "steel coil", "soybeans", "crude oil"])
+- topics: trade topics (e.g. ["anti-dumping", "freight rates", "port congestion", "export controls"])
+- trade_agreements: trade agreement or deal names mentioned
+- ports: port names mentioned
+- currencies: ISO 4217 currency codes explicitly mentioned
+- severity: low / medium / high / critical (based on breadth of traders affected)
+- urgency: informational / monitor / act_soon / immediate
+- supply_chain_impact: brief description of supply chain effect or null
+- price_effect: increase / decrease / neutral / unknown (effect on trade costs/prices)
+- affected_industries: industries that will feel the impact
+- affected_countries: ISO alpha-2 codes of countries whose traders are directly impacted
 """
 
 
@@ -119,8 +131,8 @@ async def enrich_article(article) -> tuple[EnrichmentResult, str]:
 
     client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
-    # Truncate to keep within token budget (title + first 3000 chars of content)
-    text_snippet = f"Title: {article.title}\n\n{article.content_raw[:3000]}"
+    # Truncate to keep within token budget (title + first 6000 chars of content)
+    text_snippet = f"Title: {article.title}\n\n{article.content_raw[:6000]}"
 
     response = await client.chat.completions.create(
         model=_ENRICHMENT_MODEL,
