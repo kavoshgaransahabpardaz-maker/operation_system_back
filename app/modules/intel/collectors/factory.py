@@ -28,7 +28,7 @@ def get_collector(source: dict) -> BaseCollector:
         category = source.get("category") or source.get("source_type")
         source_dict = source
 
-    if category in ("rss",):
+    if category in ("rss", "trade_news", "tariff", "regulation"):
         from app.modules.intel.collectors.rss_collector import RssCollector
         return RssCollector(source_dict)
 
