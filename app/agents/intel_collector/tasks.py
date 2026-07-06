@@ -354,8 +354,8 @@ def deduplicate_article(self, article_id: str):
             semantic_hash = compute_content_hash(article.title, article.content_raw)
             article.content_hash_semantic = semantic_hash
 
-            # Check exact semantic hash
-            dup_found, existing_id = await is_duplicate(semantic_hash, db)
+            # Check exact semantic hash — exclude self (autoflush would find the current article)
+            dup_found, existing_id = await is_duplicate(semantic_hash, db, exclude_id=art_uuid)
 
             if not dup_found:
                 # Check near-duplicates by title similarity

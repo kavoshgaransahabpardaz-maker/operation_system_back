@@ -21,16 +21,26 @@ def compute_content_hash(title: str, body: str) -> str:
     return hashlib.sha256(text_val.encode("utf-8", errors="replace")).hexdigest()
 
 
-async def is_duplicate(content_hash: str, db: AsyncSession) -> tuple[bool, str | None]:
+async def is_duplicate(
+    content_hash: str,
+    db: AsyncSession,
+    exclude_id: uuid.UUID | None = None,
+) -> tuple[bool, str | None]:
     """
     Check if an article with this content_hash_semantic already exists.
     Returns (is_dup, existing_article_id).
+
+    exclude_id: the ID of the article being checked — must be excluded so
+    an article is never considered a duplicate of itself (autoflush would
+    otherwise flush the hash to the DB before this SELECT runs).
     """
     from app.modules.intel.models import IntelArticle
 
-    result = await db.execute(
-        select(IntelArticle.id).where(IntelArticle.content_hash_semantic == content_hash)
-    )
+    query = select(IntelArticle.id).where(IntelArticle.content_hash_semantic == content_hash)
+    if exclude_id is not None:
+        query = query.where(IntelArticle.id != exclude_id)
+
+    result = await db.execute(query)
     existing_id = result.scalar_one_or_none()
     if existing_id:
         return True, str(existing_id)
