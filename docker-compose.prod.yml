@@ -160,8 +160,9 @@ services:
       celery -A app.core.celery_app beat
       --loglevel=warning
       --scheduler celery.beat:PersistentScheduler
+      --schedule /app/beat-data/celerybeat-schedule
     volumes:
-      - beat_data:/app/celerybeat-schedule
+      - beat_data:/app/beat-data
     depends_on:
       redis:
         condition: service_healthy
