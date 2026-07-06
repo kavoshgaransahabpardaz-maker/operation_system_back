@@ -211,7 +211,6 @@ services:
 networks:
   internal:
     driver: bridge
-    internal: true
   external:
     driver: bridge
   brokerai-web:

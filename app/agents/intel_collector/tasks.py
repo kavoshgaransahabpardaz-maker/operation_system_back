@@ -24,6 +24,43 @@ from app.core.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
+def _run_async(coro):
+    """
+    Run an async coroutine in a fresh event loop.
+
+    Celery uses ForkPoolWorker on Linux — when a worker process is forked,
+    asyncpg futures/connections from the parent's event loop become invalid
+    in the child.  This helper:
+      1. Creates a brand-new event loop for each task invocation.
+      2. Disposes the SQLAlchemy async engine's connection pool so asyncpg
+         doesn't try to reuse connections bound to the old loop.
+      3. Cancels any stray tasks and closes the loop cleanly.
+    """
+    from app.core.database import async_engine  # local import avoids circular
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        # Dispose connection pool — releases all asyncpg connections for this loop
+        try:
+            loop.run_until_complete(async_engine.dispose())
+        except Exception:
+            pass
+        # Cancel any remaining background tasks
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            try:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            except Exception:
+                pass
+        loop.close()
+        asyncio.set_event_loop(None)
+
+
 # ---------------------------------------------------------------------------
 # poll_all_sources — Celery beat entry point (hourly)
 # ---------------------------------------------------------------------------
@@ -43,7 +80,7 @@ def poll_all_sources():
             return [str(sid) for sid in result.scalars()]
 
     try:
-        source_ids = asyncio.run(_load_sources())
+        source_ids = _run_async(_load_sources())
     except Exception as exc:
         logger.error("poll_all_sources: failed to load sources: %s", exc)
         return
@@ -178,7 +215,7 @@ def poll_source(self, source_id: str):
             return new_count, new_article_ids
 
     try:
-        new_count, new_article_ids = asyncio.run(_run())
+        new_count, new_article_ids = _run_async(_run())
     except Exception as exc:
         logger.error("poll_source %s failed: %s", source_id, exc)
         raise self.retry(exc=exc, countdown=120)
@@ -272,7 +309,7 @@ def parse_article(self, article_id: str):
             await db.commit()
 
     try:
-        asyncio.run(_run())
+        _run_async(_run())
     except Exception as exc:
         logger.error("parse_article %s failed: %s", article_id, exc)
         raise self.retry(exc=exc, countdown=30)
@@ -349,7 +386,7 @@ def deduplicate_article(self, article_id: str):
                 return True
 
     try:
-        is_unique = asyncio.run(_run())
+        is_unique = _run_async(_run())
     except Exception as exc:
         logger.error("deduplicate_article %s failed: %s", article_id, exc)
         return
@@ -465,7 +502,7 @@ def enrich_article_task(self, article_id: str):
             )
 
     try:
-        asyncio.run(_run())
+        _run_async(_run())
     except Exception as exc:
         logger.error("enrich_article_task %s failed: %s", article_id, exc)
         raise self.retry(exc=exc, countdown=60)
@@ -558,7 +595,7 @@ def match_article_task(self, article_id: str):
                     )
 
     try:
-        asyncio.run(_run())
+        _run_async(_run())
     except Exception as exc:
         logger.error("match_article_task %s failed: %s", article_id, exc)
 
@@ -631,7 +668,7 @@ def send_alert_task(org_id: str, article_id: str, match_reason: str):
             logger.info("send_alert_task: alerts created for org=%s article=%s", org_id, article_id)
 
     try:
-        asyncio.run(_run())
+        _run_async(_run())
     except Exception as exc:
         logger.error("send_alert_task failed org=%s article=%s: %s", org_id, article_id, exc)
 
@@ -651,7 +688,7 @@ def update_trending_topics_task():
             await update_trending_topics(db)
 
     try:
-        asyncio.run(_run())
+        _run_async(_run())
         logger.info("update_trending_topics_task: completed")
     except Exception as exc:
         logger.error("update_trending_topics_task failed: %s", exc)
