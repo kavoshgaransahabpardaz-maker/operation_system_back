@@ -25,8 +25,20 @@ class RssCollector(BaseCollector):
         url = self.source.get("url", "")
         source_name = self.source.get("name", "")
 
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0.0.0 Safari/537.36"
+            ),
+            "Accept": "application/rss+xml, application/xml, text/xml, */*",
+        }
         try:
-            async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT, follow_redirects=True) as client:
+            async with httpx.AsyncClient(
+                timeout=_REQUEST_TIMEOUT,
+                follow_redirects=True,
+                headers=headers,
+            ) as client:
                 response = await client.get(url)
                 response.raise_for_status()
                 raw_content = response.text

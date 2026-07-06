@@ -21,8 +21,9 @@ from datetime import datetime, timezone
 
 from app.core.celery_app import celery_app
 
-# Import shipment model so SQLAlchemy can resolve the IntelMatch.shipment_id FK
+# Import models so SQLAlchemy can resolve IntelMatch FKs (shipments, organizations)
 import app.modules.shipment_identification.models  # noqa: F401
+import app.modules.user_management.models  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
