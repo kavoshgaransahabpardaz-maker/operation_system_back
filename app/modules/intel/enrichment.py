@@ -87,6 +87,20 @@ class EnrichmentResult(BaseModel):
     affected_industries: list[str] = []
     affected_countries: list[str] = []
 
+    @field_validator(
+        "countries", "hs_chapters", "hs_headings", "regulation_refs",
+        "industries", "companies", "commodities", "topics",
+        "trade_agreements", "ports", "currencies",
+        "affected_industries", "affected_countries",
+        mode="before",
+    )
+    @classmethod
+    def coerce_to_list(cls, v):
+        """LLM sometimes returns a string instead of a list — wrap it."""
+        if isinstance(v, str):
+            return [v] if v.strip() else []
+        return v or []
+
     @field_validator("event_type")
     @classmethod
     def validate_event_type(cls, v: str) -> str:
