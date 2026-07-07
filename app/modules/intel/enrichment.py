@@ -34,8 +34,12 @@ Respond ONLY with a valid JSON object with exactly these keys:
     * sanctions — sanctions lists, asset freezes, export controls, embargoes, denied parties
     * regulation — customs procedures, compliance requirements, border controls, licensing, product standards, labour law affecting trade
     * trade_agreement — FTAs, bilateral/multilateral deals, MoUs, negotiations, trade disputes (WTO panels)
-    * market_notice — freight rates, shipping schedules, port congestion, carrier announcements, capacity changes, commodity price movements
-    * other — only use if none of the above apply at all
+    * market_notice — freight rates, shipping schedules, port congestion, carrier announcements, capacity changes, commodity/energy price movements
+    * company_news — corporate earnings, M&A, strategic partnerships, supply agreements, restructuring, IPOs, layoffs for companies in trade-relevant sectors (shipping, manufacturing, logistics, commodities, retail, tech hardware)
+    * economic_data — macroeconomic indicators, GDP, PMI, trade statistics, sector growth/contraction, government fiscal policy, interest rates, currency policy with trade implications
+    * supply_chain — supply chain disruptions or shifts, logistics partnerships, distribution network changes, nearshoring/reshoring, infrastructure investments affecting trade flows
+    * geopolitical — political developments, elections, conflicts, military actions, territorial disputes that affect trade routes, market access, or trade relations
+    * other — ONLY use if the article has no meaningful connection to trade, supply chains, or international commerce (e.g. pure entertainment, sports, personal finance unrelated to trade)
 - countries: ISO 3166-1 alpha-2 codes (uppercase). Include ALL countries mentioned OR clearly implied (trade routes, ports, company headquarters, product origins). E.g. if the article mentions "Asia-Europe route" include key countries. If "US tariffs on China" include ["US","CN"].
 - hs_chapters: 2-digit HS chapter strings ONLY if explicitly stated (e.g. "72" for steel). Empty list if not mentioned.
 - hs_headings: 4-digit HS heading strings ONLY if explicitly stated. Empty list if not mentioned.
@@ -106,7 +110,9 @@ class EnrichmentResult(BaseModel):
     def validate_event_type(cls, v: str) -> str:
         allowed = {
             "tariff_change", "sanctions", "regulation",
-            "trade_agreement", "market_notice", "other",
+            "trade_agreement", "market_notice",
+            "company_news", "economic_data", "supply_chain", "geopolitical",
+            "other",
         }
         return v if v in allowed else "other"
 
