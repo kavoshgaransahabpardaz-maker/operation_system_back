@@ -302,3 +302,64 @@ class SearchResult(BaseModel):
     processing_status: str
     rank: float
     match_source: str
+
+
+# ---------------------------------------------------------------------------
+# Article Feedback
+# ---------------------------------------------------------------------------
+
+class ArticleFeedbackCreate(BaseModel):
+    feedback: str  # "like" | "dislike"
+    comment: str | None = None
+
+
+class ArticleFeedbackOut(BaseModel):
+    id: uuid.UUID
+    article_id: uuid.UUID
+    user_id: uuid.UUID
+    feedback: str
+    comment: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class MyFeedbackOut(BaseModel):
+    """Current user's feedback on a single article (null if none given)."""
+    feedback: str | None  # "like" | "dislike" | null
+    comment: str | None
+
+
+# ---------------------------------------------------------------------------
+# Filter options (for frontend dropdowns)
+# ---------------------------------------------------------------------------
+
+class ImpactLevel(BaseModel):
+    level: int
+    label: str
+    description: str
+
+
+class EventTypeOption(BaseModel):
+    value: str
+    label: str
+    description: str
+
+
+class FilterOptionsOut(BaseModel):
+    countries: list[str]       # ISO alpha-2 codes found in article_tags
+    industries: list[str]      # industry tags found in article_tags
+    event_types: list[EventTypeOption]
+    impact_scale: list[ImpactLevel]
+
+
+# ---------------------------------------------------------------------------
+# Personalized summary
+# ---------------------------------------------------------------------------
+
+class PersonalizedSummaryOut(BaseModel):
+    article_id: uuid.UUID
+    summary: str              # AI-generated summary tailored to org interests
+    relevant_interests: list[str]  # which interests matched
+    general_summary: str | None    # original enrichment summary for comparison

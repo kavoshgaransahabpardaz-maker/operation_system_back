@@ -371,3 +371,35 @@ class NotificationPreference(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+
+
+class ArticleFeedback(Base):
+    """Per-user thumbs-up / thumbs-down on an article, with optional comment."""
+
+    __tablename__ = "article_feedback"
+    __table_args__ = (
+        UniqueConstraint("article_id", "user_id", name="uq_article_feedback_article_user"),
+        Index("ix_article_feedback_article_id", "article_id"),
+        Index("ix_article_feedback_org_id", "org_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    article_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("intel_articles.id"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    feedback: Mapped[str] = mapped_column(String(10), nullable=False)  # "like" | "dislike"
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )

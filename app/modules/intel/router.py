@@ -29,7 +29,10 @@ from app.modules.intel.models import (
 )
 from app.modules.intel.schemas import (
     AlertDeliveryOut,
+    ArticleFeedbackCreate,
+    ArticleFeedbackOut,
     EventTypeCount,
+    FilterOptionsOut,
     HeatmapEntry,
     ImpactTimelineEntry,
     IntelArticleOut,
@@ -41,8 +44,10 @@ from app.modules.intel.schemas import (
     IntelSourceOut,
     IntelSourceUpdate,
     KnowledgeRelationOut,
+    MyFeedbackOut,
     NotificationPreferenceOut,
     NotificationPreferenceUpdate,
+    PersonalizedSummaryOut,
     SearchResult,
     TrendingTopicOut,
     UserInterestCreate,
@@ -63,13 +68,18 @@ async def intel_feed(
     offset: int = Query(0, ge=0),
     event_type: str | None = Query(None),
     min_impact: int | None = Query(None, ge=1, le=5),
+    country: str | None = Query(None, description="ISO alpha-2 country code filter"),
+    industry: str | None = Query(None, description="Industry tag filter"),
+    matched_only: bool = Query(False, description="Return only articles matched to this org"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    Returns articles matched to the current user's org, ranked matched-first,
-    then by impact_score desc, then ingested_at desc.
+    Returns articles for the feed. Filters: event_type, min_impact, country, industry.
+    Ranked matched-first, then by impact_score desc, then ingested_at desc.
     """
+    from app.modules.intel.models import ArticleTag
+
     org_id = current_user.org_id
 
     # IDs of articles that have matches for this org
@@ -78,26 +88,45 @@ async def intel_feed(
     )
     matched_article_ids: set[uuid.UUID] = set(matched_ids_result.scalars())
 
-    # Build base article query joined with enrichment filters
+    # Build base query
     query = (
         select(IntelArticle)
         .join(IntelEnrichment, IntelEnrichment.article_id == IntelArticle.id, isouter=True)
         .where(IntelArticle.is_duplicate == False)
-        .order_by(desc(IntelArticle.ingested_at))
-        .offset(offset)
-        .limit(limit)
     )
 
     if event_type:
         query = query.where(IntelEnrichment.event_type == event_type)
     if min_impact is not None:
         query = query.where(IntelEnrichment.impact_score >= min_impact)
+    if country:
+        query = query.where(
+            IntelArticle.id.in_(
+                select(ArticleTag.article_id).where(
+                    ArticleTag.tag_type == "country",
+                    ArticleTag.tag == country.upper(),
+                )
+            )
+        )
+    if industry:
+        query = query.where(
+            IntelArticle.id.in_(
+                select(ArticleTag.article_id).where(
+                    ArticleTag.tag_type == "industry",
+                    ArticleTag.tag == industry.lower(),
+                )
+            )
+        )
+    if matched_only:
+        query = query.where(IntelArticle.id.in_(matched_article_ids))
+
+    query = query.order_by(desc(IntelArticle.ingested_at)).offset(offset).limit(limit)
 
     article_result = await db.execute(query)
     articles: list[IntelArticle] = list(article_result.scalars())
 
-    # Sort: matched articles first
-    articles.sort(key=lambda a: (0 if a.id in matched_article_ids else 1, ))
+    # Sort: matched articles first, then by ingested_at desc
+    articles.sort(key=lambda a: (0 if a.id in matched_article_ids else 1,))
 
     feed_items: list[IntelFeedItem] = []
     for article in articles:
@@ -639,6 +668,286 @@ async def knowledge_graph(
         subject_value=subject_value,
         db=db,
     )
+
+
+# ---------------------------------------------------------------------------
+# Filter options — countries, industries, event types, impact scale
+# ---------------------------------------------------------------------------
+
+_EVENT_TYPE_OPTIONS = [
+    {"value": "tariff_change", "label": "Tariff & Duty Changes", "description": "New or changed import/export duties, anti-dumping measures, quota changes"},
+    {"value": "sanctions", "label": "Sanctions", "description": "Sanctions lists, asset freezes, export controls, embargoes, denied parties"},
+    {"value": "regulation", "label": "Regulation", "description": "Customs procedures, compliance requirements, licensing, product standards"},
+    {"value": "trade_agreement", "label": "Trade Agreements", "description": "FTAs, bilateral deals, MoUs, WTO disputes"},
+    {"value": "market_notice", "label": "Market Notice", "description": "Freight rates, port congestion, carrier announcements, commodity prices"},
+    {"value": "company_news", "label": "Company News", "description": "M&A, supply agreements, restructuring in trade-relevant sectors"},
+    {"value": "economic_data", "label": "Economic Data", "description": "GDP, PMI, trade statistics, fiscal policy, currency movements"},
+    {"value": "supply_chain", "label": "Supply Chain", "description": "Disruptions, nearshoring, infrastructure investments affecting trade flows"},
+    {"value": "geopolitical", "label": "Geopolitical", "description": "Political developments and conflicts affecting trade routes or market access"},
+    {"value": "other", "label": "Other", "description": "Articles with indirect or general trade relevance"},
+]
+
+_IMPACT_SCALE = [
+    {"level": 1, "label": "Informational", "description": "General background — no action needed, worth knowing"},
+    {"level": 2, "label": "Monitor", "description": "Minor operational impact — worth watching for developments"},
+    {"level": 3, "label": "Moderate Impact", "description": "May affect your costs or compliance procedures"},
+    {"level": 4, "label": "Significant", "description": "Affects pricing, routing, or compliance for active traders — review required"},
+    {"level": 5, "label": "Immediate Action", "description": "New sanction, emergency tariff, or port closure — act now"},
+]
+
+
+@router.get("/intel/filter-options", response_model=FilterOptionsOut)
+async def get_filter_options(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Returns available filter values for the feed UI: countries, industries,
+    event types with descriptions, and the full 1–5 impact scale definition.
+    """
+    from app.modules.intel.models import ArticleTag
+
+    countries_result = await db.execute(
+        select(ArticleTag.tag)
+        .where(ArticleTag.tag_type == "country")
+        .distinct()
+        .order_by(ArticleTag.tag)
+    )
+    countries = list(countries_result.scalars())
+
+    industries_result = await db.execute(
+        select(ArticleTag.tag)
+        .where(ArticleTag.tag_type == "industry")
+        .distinct()
+        .order_by(ArticleTag.tag)
+    )
+    industries = list(industries_result.scalars())
+
+    return FilterOptionsOut(
+        countries=countries,
+        industries=industries,
+        event_types=_EVENT_TYPE_OPTIONS,
+        impact_scale=_IMPACT_SCALE,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Article feedback — like / dislike / comment
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/intel/articles/{article_id}/feedback",
+    response_model=ArticleFeedbackOut,
+    status_code=status.HTTP_200_OK,
+)
+async def submit_feedback(
+    article_id: uuid.UUID,
+    data: ArticleFeedbackCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Submit or update thumbs-up / thumbs-down feedback on an article.
+    One record per user per article — re-submitting updates the existing one.
+    feedback must be 'like' or 'dislike'.
+    """
+    from app.modules.intel.models import ArticleFeedback
+
+    if data.feedback not in ("like", "dislike"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="feedback must be 'like' or 'dislike'")
+
+    await _get_article_or_404(article_id, db)
+
+    result = await db.execute(
+        select(ArticleFeedback).where(
+            ArticleFeedback.article_id == article_id,
+            ArticleFeedback.user_id == current_user.id,
+        )
+    )
+    fb = result.scalar_one_or_none()
+
+    if fb:
+        fb.feedback = data.feedback
+        fb.comment = data.comment
+    else:
+        fb = ArticleFeedback(
+            article_id=article_id,
+            user_id=current_user.id,
+            org_id=current_user.org_id,
+            feedback=data.feedback,
+            comment=data.comment,
+        )
+        db.add(fb)
+
+    await db.commit()
+    await db.refresh(fb)
+    return fb
+
+
+@router.get("/intel/articles/{article_id}/feedback", response_model=MyFeedbackOut)
+async def get_my_feedback(
+    article_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Return the current user's feedback on this article, or null values if none given."""
+    from app.modules.intel.models import ArticleFeedback
+
+    result = await db.execute(
+        select(ArticleFeedback).where(
+            ArticleFeedback.article_id == article_id,
+            ArticleFeedback.user_id == current_user.id,
+        )
+    )
+    fb = result.scalar_one_or_none()
+    if not fb:
+        return MyFeedbackOut(feedback=None, comment=None)
+    return MyFeedbackOut(feedback=fb.feedback, comment=fb.comment)
+
+
+@router.delete("/intel/articles/{article_id}/feedback", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_feedback(
+    article_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Remove the current user's feedback on an article."""
+    from app.modules.intel.models import ArticleFeedback
+
+    result = await db.execute(
+        select(ArticleFeedback).where(
+            ArticleFeedback.article_id == article_id,
+            ArticleFeedback.user_id == current_user.id,
+        )
+    )
+    fb = result.scalar_one_or_none()
+    if fb:
+        await db.delete(fb)
+        await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Personalized AI summary
+# ---------------------------------------------------------------------------
+
+@router.get("/intel/articles/{article_id}/personalized-summary", response_model=PersonalizedSummaryOut)
+async def get_personalized_summary(
+    article_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Generate an AI summary of this article tailored to the org's declared interests
+    (HS codes, countries, industries, commodities). Computed on demand — not cached.
+    """
+    article = await _get_article_or_404(article_id, db)
+    enrichment = await _load_enrichment(article_id, db)
+
+    # Load org interests
+    interests_result = await db.execute(
+        select(UserInterest).where(UserInterest.org_id == current_user.org_id)
+    )
+    interests: list[UserInterest] = list(interests_result.scalars())
+
+    interest_lines = [f"- {i.interest_type}: {i.value}" for i in interests]
+    interest_block = "\n".join(interest_lines) if interest_lines else "No specific interests defined yet."
+
+    # Identify which interests are relevant to this article
+    enrichment_values: set[str] = set()
+    if enrichment:
+        for lst in [enrichment.countries, enrichment.hs_chapters, enrichment.hs_headings,
+                    enrichment.industries, enrichment.commodities]:
+            if lst:
+                enrichment_values.update(str(v).upper() for v in lst)
+
+    relevant_interests = [
+        f"{i.interest_type}: {i.value}"
+        for i in interests
+        if i.value.upper() in enrichment_values
+    ]
+
+    general_summary = enrichment.summary if enrichment else None
+
+    # Build prompt
+    text_snippet = f"Title: {article.title}\n\n{article.content_raw[:4000]}"
+    prompt = f"""You are a trade intelligence analyst. Summarise the following article in 3–4 sentences, specifically highlighting what it means for a customs broker with these interests:
+
+{interest_block}
+
+Focus on: tariff changes, duty rates, compliance steps, HS code implications, affected countries, and any immediate actions the broker should consider.
+If the article is not directly relevant to the interests above, say so briefly but still summarise the key trade impact.
+
+Article:
+{text_snippet}
+
+Return ONLY the summary — no preamble, no bullet points."""
+
+    try:
+        from openai import AsyncOpenAI
+        from app.core.config import settings
+
+        client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini-2024-07-18",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=300,
+        )
+        personalized = response.choices[0].message.content.strip()
+    except Exception:
+        personalized = general_summary or "Summary unavailable."
+
+    return PersonalizedSummaryOut(
+        article_id=article_id,
+        summary=personalized,
+        relevant_interests=relevant_interests,
+        general_summary=general_summary,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Knowledge graph stats
+# ---------------------------------------------------------------------------
+
+@router.get("/intel/knowledge-graph/stats")
+async def knowledge_graph_stats(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Return counts and samples from the knowledge graph.
+    Use this to verify the graph is populated and understand what entities it contains.
+    """
+    total_result = await db.execute(
+        select(func.count(KnowledgeRelation.id))
+    )
+    total = total_result.scalar() or 0
+
+    by_predicate_result = await db.execute(
+        select(KnowledgeRelation.predicate, func.count(KnowledgeRelation.id))
+        .group_by(KnowledgeRelation.predicate)
+        .order_by(desc(func.count(KnowledgeRelation.id)))
+    )
+    by_predicate = {row[0]: row[1] for row in by_predicate_result.fetchall()}
+
+    by_subject_type_result = await db.execute(
+        select(KnowledgeRelation.subject_type, func.count(KnowledgeRelation.id))
+        .group_by(KnowledgeRelation.subject_type)
+        .order_by(desc(func.count(KnowledgeRelation.id)))
+    )
+    by_subject_type = {row[0]: row[1] for row in by_subject_type_result.fetchall()}
+
+    return {
+        "total_relations": total,
+        "by_predicate": by_predicate,
+        "by_subject_type": by_subject_type,
+        "explanation": (
+            "The knowledge graph extracts entity relationships from enriched articles. "
+            "Relations include: country→commodity (affects_commodity), company→country (operates_in), "
+            "sanctions→company (targets), country→trade_agreement (party_to), hs_code→country (affected_in). "
+            "It is populated automatically as articles are enriched by the Celery pipeline."
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
