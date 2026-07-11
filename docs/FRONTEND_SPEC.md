@@ -96,7 +96,8 @@ export type DocumentType =
   | 'delivery_order'
   | 'mill_certificate'        // NEW
   | 'suppliers_declaration'   // NEW
-  | 'cmr'                     // NEW — CMR consignment note
+  | 'cmr'                          // NEW — CMR consignment note
+  | 'phytosanitary_certificate'    // NEW — plant health certificate
   | 'other';
 
 export type EmailProvider = 'gmail' | 'microsoft365' | 'outlook' | 'imap';
@@ -137,7 +138,11 @@ export type FieldName =
   | 'incoterm'
   | 'invoice_date'
   | 'shipment_date'
-  | 'reference';
+  | 'reference'
+  | 'local_reference'        // phytosanitary: NPPO local reference
+  | 'destination_country'    // phytosanitary: ISO country code of destination
+  | 'point_of_entry'         // phytosanitary: port/border entry point
+  | 'commodity_description'; // phytosanitary: description of plants/goods
 
 export type FieldStatus = 'extracted' | 'confirmed' | 'corrected';
 
@@ -618,7 +623,6 @@ export interface AlertDelivery {
   status: AlertDeliveryStatus;
 }
 ```
-
 ---
 
 ## 4. API Client
@@ -1061,8 +1065,12 @@ export const FIELD_NAME_LABELS: Record<FieldName, string> = {
   stated_origin: 'Country of Origin',
   incoterm: 'Incoterm',
   invoice_date: 'Invoice Date',
-  shipment_date: 'Shipment Date',
+  shipment_date: 'Issue Date',
   reference: 'Reference Number',
+  local_reference: 'Local Reference',
+  destination_country: 'Destination Country',
+  point_of_entry: 'Point of Entry',
+  commodity_description: 'Commodity Description',
 };
 
 export const FLAG_TYPE_LABELS: Record<FlagType, string> = {
@@ -1105,6 +1113,7 @@ export const DOC_TYPE_LABELS: Record<DocumentType, string> = {
   mill_certificate: 'Mill Certificate',
   suppliers_declaration: "Supplier's Declaration",
   cmr: 'CMR Consignment Note',
+  phytosanitary_certificate: 'Phytosanitary Certificate',
   // ...all previous entries unchanged
 };
 

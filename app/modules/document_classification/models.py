@@ -22,6 +22,7 @@ class DocumentType(str, enum.Enum):
     MILL_CERTIFICATE = "mill_certificate"
     SUPPLIERS_DECLARATION = "suppliers_declaration"
     CMR = "cmr"
+    PHYTOSANITARY_CERTIFICATE = "phytosanitary_certificate"
     OTHER = "other"
 
 

@@ -21,6 +21,10 @@ class FieldName(str, enum.Enum):
     INVOICE_DATE = "invoice_date"
     SHIPMENT_DATE = "shipment_date"
     REFERENCE = "reference"
+    LOCAL_REFERENCE = "local_reference"
+    DESTINATION_COUNTRY = "destination_country"
+    POINT_OF_ENTRY = "point_of_entry"
+    COMMODITY_DESCRIPTION = "commodity_description"
 
 
 class ExtractedFieldOut(BaseModel):

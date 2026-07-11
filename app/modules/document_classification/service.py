@@ -30,6 +30,7 @@ _SYSTEM_PROMPT = """You are a customs brokerage expert. Classify the document in
 - mill_certificate: Manufacturer's quality/test certificate for raw materials (e.g. steel, metals)
 - suppliers_declaration: Exporter's statement of origin for preferential tariff purposes (EUR.1 equivalent)
 - cmr: CMR road consignment note (international road freight contract)
+- phytosanitary_certificate: Official plant health certificate issued by a national authority (NPPO), often bearing an IMSOC or local reference, certifying goods are free of pests
 - other: Any document that does not fit the above categories
 
 Respond ONLY with a JSON object in this exact format:

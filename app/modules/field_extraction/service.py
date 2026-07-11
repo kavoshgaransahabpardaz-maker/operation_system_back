@@ -66,6 +66,20 @@ DOC_TYPE_FIELDS: dict[str, list[FieldName]] = {
         FieldName.SHIPMENT_DATE,
         FieldName.REFERENCE,
     ],
+    "phytosanitary_certificate": [
+        FieldName.REFERENCE,
+        FieldName.LOCAL_REFERENCE,
+        FieldName.PARTY_SHIPPER,
+        FieldName.PARTY_CONSIGNEE,
+        FieldName.STATED_ORIGIN,
+        FieldName.DESTINATION_COUNTRY,
+        FieldName.HS_CODE,
+        FieldName.COMMODITY_DESCRIPTION,
+        FieldName.GROSS_WEIGHT,
+        FieldName.QUANTITY,
+        FieldName.SHIPMENT_DATE,
+        FieldName.POINT_OF_ENTRY,
+    ],
 }
 _DEFAULT_FIELDS = [FieldName.REFERENCE]
 
@@ -80,6 +94,7 @@ _FIELD_TYPE_MAP: dict[FieldName, FieldType] = {
     FieldName.INCOTERM: FieldType.ISO_CODE,
     FieldName.INVOICE_DATE: FieldType.DATE,
     FieldName.SHIPMENT_DATE: FieldType.DATE,
+    FieldName.DESTINATION_COUNTRY: FieldType.ISO_CODE,
 }
 
 _CONFIDENCE_PENALTY = 0.2
