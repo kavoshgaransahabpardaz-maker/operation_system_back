@@ -373,6 +373,28 @@ class NotificationPreference(Base):
     )
 
 
+class OrgSourcePreference(Base):
+    """Per-org enable/disable and priority boost for an intel source."""
+
+    __tablename__ = "org_source_preferences"
+    __table_args__ = (
+        UniqueConstraint("org_id", "source_id", name="uq_org_source_pref"),
+        Index("ix_org_source_preferences_org_id", "org_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("intel_sources.id"), nullable=False
+    )
+    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
 class ArticleFeedback(Base):
     """Per-user thumbs-up / thumbs-down on an article, with optional comment."""
 

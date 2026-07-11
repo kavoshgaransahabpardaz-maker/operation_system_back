@@ -43,10 +43,13 @@ from app.modules.intel.schemas import (
     IntelSourceCreate,
     IntelSourceOut,
     IntelSourceUpdate,
+    InterestTypeOption,
     KnowledgeRelationOut,
     MyFeedbackOut,
     NotificationPreferenceOut,
     NotificationPreferenceUpdate,
+    OrgSourcePreferenceOut,
+    OrgSourcePreferencePatch,
     PersonalizedSummaryOut,
     SearchResult,
     TrendingTopicOut,
@@ -267,24 +270,29 @@ async def add_interest(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
 ):
+    # Validate type + format
+    try:
+        clean_value = UserInterestCreate.validate_interest(data.interest_type, data.value)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+    interest_type = data.interest_type.strip().lower()
+
     # Check for existing
     existing = await db.execute(
         select(UserInterest).where(
             UserInterest.org_id == current_user.org_id,
-            UserInterest.interest_type == data.interest_type,
-            UserInterest.value == data.value,
+            UserInterest.interest_type == interest_type,
+            UserInterest.value == clean_value,
         )
     )
     if existing.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Interest already registered",
-        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Interest already registered")
 
     interest = UserInterest(
         org_id=current_user.org_id,
-        interest_type=data.interest_type,
-        value=data.value,
+        interest_type=interest_type,
+        value=clean_value,
         is_explicit=True,
     )
     db.add(interest)
@@ -310,6 +318,62 @@ async def delete_interest(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Interest not found")
     await db.delete(interest)
     await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Interest type catalogue — drives frontend dropdowns
+# ---------------------------------------------------------------------------
+
+_INTEREST_TYPE_OPTIONS: list[dict] = [
+    {
+        "type": "country",
+        "label": "Country",
+        "description": "Track news affecting a specific country",
+        "example": "GB",
+        "format_hint": "2-letter ISO alpha-2 code (e.g. GB, US, DE, CN)",
+    },
+    {
+        "type": "hs_chapter",
+        "label": "HS Chapter",
+        "description": "Track news for an entire HS chapter (2 digits)",
+        "example": "72",
+        "format_hint": "2-digit number (e.g. 72 = Iron and Steel)",
+    },
+    {
+        "type": "hs_heading",
+        "label": "HS Heading",
+        "description": "Track news for a specific HS heading (4 digits)",
+        "example": "7208",
+        "format_hint": "4-digit number (e.g. 7208 = Flat-rolled products of iron)",
+    },
+    {
+        "type": "hs_code",
+        "label": "HS Code",
+        "description": "Track news for a specific HS commodity code (6–10 digits)",
+        "example": "720811",
+        "format_hint": "6–10 digit number",
+    },
+    {
+        "type": "party_name",
+        "label": "Company / Party Name",
+        "description": "Track news mentioning a specific supplier, buyer, carrier or port",
+        "example": "Maersk",
+        "format_hint": "Free text — the company or party name",
+    },
+    {
+        "type": "industry",
+        "label": "Industry",
+        "description": "Track news for a specific industry sector",
+        "example": "steel",
+        "format_hint": "Free text — e.g. steel, automotive, energy, agriculture",
+    },
+]
+
+
+@router.get("/intel/interest-types", response_model=list[InterestTypeOption])
+async def list_interest_types(current_user: User = Depends(get_current_user)):
+    """Return the catalogue of valid interest types with format hints for the UI."""
+    return _INTEREST_TYPE_OPTIONS
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +474,90 @@ async def trigger_poll(
     poll_source.apply_async(args=[str(source_id)], queue="intel_collect")
 
     return {"status": "queued", "source_id": str(source_id), "source_name": source.name}
+
+
+# ---------------------------------------------------------------------------
+# Source preferences — users can enable/disable sources for their org
+# ---------------------------------------------------------------------------
+
+@router.get("/intel/sources/my-preferences", response_model=list[OrgSourcePreferenceOut])
+async def list_source_preferences(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Return all sources with this org's preference (is_enabled).
+    Sources with no preference record are implicitly enabled.
+    """
+    from app.modules.intel.models import OrgSourcePreference
+
+    sources_result = await db.execute(
+        select(IntelSource).order_by(asc(IntelSource.priority), asc(IntelSource.name))
+    )
+    sources = list(sources_result.scalars())
+
+    prefs_result = await db.execute(
+        select(OrgSourcePreference).where(OrgSourcePreference.org_id == current_user.org_id)
+    )
+    prefs_by_source: dict[uuid.UUID, OrgSourcePreference] = {
+        p.source_id: p for p in prefs_result.scalars()
+    }
+
+    out = []
+    for src in sources:
+        pref = prefs_by_source.get(src.id)
+        out.append(OrgSourcePreferenceOut(
+            id=pref.id if pref else src.id,
+            source_id=src.id,
+            source_name=src.name,
+            is_enabled=pref.is_enabled if pref else True,
+            created_at=pref.created_at if pref else src.created_at,
+        ))
+    return out
+
+
+@router.patch("/intel/sources/{source_id}/preference", response_model=OrgSourcePreferenceOut)
+async def update_source_preference(
+    source_id: uuid.UUID,
+    data: OrgSourcePreferencePatch,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Enable or disable a news source for this org."""
+    from app.modules.intel.models import OrgSourcePreference
+
+    source_result = await db.execute(select(IntelSource).where(IntelSource.id == source_id))
+    source = source_result.scalar_one_or_none()
+    if not source:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found")
+
+    pref_result = await db.execute(
+        select(OrgSourcePreference).where(
+            OrgSourcePreference.org_id == current_user.org_id,
+            OrgSourcePreference.source_id == source_id,
+        )
+    )
+    pref = pref_result.scalar_one_or_none()
+
+    if pref:
+        pref.is_enabled = data.is_enabled
+    else:
+        pref = OrgSourcePreference(
+            org_id=current_user.org_id,
+            source_id=source_id,
+            is_enabled=data.is_enabled,
+        )
+        db.add(pref)
+
+    await db.commit()
+    await db.refresh(pref)
+    return OrgSourcePreferenceOut(
+        id=pref.id,
+        source_id=pref.source_id,
+        source_name=source.name,
+        is_enabled=pref.is_enabled,
+        created_at=pref.created_at,
+    )
 
 
 # ---------------------------------------------------------------------------

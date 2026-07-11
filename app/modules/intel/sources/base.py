@@ -143,6 +143,47 @@ BUILTIN_SOURCES: list[dict] = [
         "poll_cadence_minutes": 240,
         "priority": 3,
     },
+    # ── User-requested UK/industry sources ───────────────────────────────────
+    {
+        "name": "BIFA News",
+        "source_type": "rss",
+        "category": "trade_news",
+        "url": "https://www.bifa.org/news/?format=rss",
+        "poll_cadence_minutes": 120,
+        "priority": 2,
+    },
+    {
+        "name": "Institute of Export & International Trade",
+        "source_type": "rss",
+        "category": "trade_news",
+        "url": "https://www.export.org.uk/news/rss/",
+        "poll_cadence_minutes": 120,
+        "priority": 2,
+    },
+    {
+        "name": "IATA News",
+        "source_type": "rss",
+        "category": "trade_news",
+        "url": "https://www.iata.org/en/pressroom/newsroom/rss/",
+        "poll_cadence_minutes": 240,
+        "priority": 3,
+    },
+    {
+        "name": "British Chambers of Commerce",
+        "source_type": "rss",
+        "category": "trade_news",
+        "url": "https://www.britishchambers.org.uk/news/feed/",
+        "poll_cadence_minutes": 240,
+        "priority": 3,
+    },
+    {
+        "name": "WCO Committee Updates",
+        "source_type": "rss",
+        "category": "regulation",
+        "url": "https://www.wcoomd.org/en/about-us/wco-secretariat/secretary-general/the-secretary-general-speaks.rss",
+        "poll_cadence_minutes": 240,
+        "priority": 2,
+    },
 ]
 
 

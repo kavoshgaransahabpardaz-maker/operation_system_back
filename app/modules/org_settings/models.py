@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,6 +19,16 @@ class OrgSettings(Base):
     weight_qty_tolerance_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
     value_tolerance_pct: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     name_match_threshold: Mapped[float] = mapped_column(Float, nullable=False, default=0.93)
+    # Orchestration
+    doc_organization_by: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="shipment"
+    )  # shipment | client | lane | date
+    auto_fix_threshold: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.95
+    )  # auto-resolve mismatches above this confidence
+    email_critical_alerts: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )  # send email for impact_score >= 4 news
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

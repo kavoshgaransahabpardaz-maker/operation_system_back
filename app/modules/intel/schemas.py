@@ -154,9 +154,42 @@ class UserInterestOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+VALID_INTEREST_TYPES = {
+    "country", "hs_chapter", "hs_heading", "hs_code", "party_name", "industry",
+}
+
+
 class UserInterestCreate(BaseModel):
-    interest_type: str  # hs_chapter / hs_heading / country / party_name
+    interest_type: str
     value: str
+
+    @classmethod
+    def validate_interest(cls, interest_type: str, value: str) -> str:
+        """Returns cleaned value or raises ValueError."""
+        import re
+        v = value.strip()
+        if not v:
+            raise ValueError("value cannot be empty")
+        t = interest_type.strip().lower()
+        if t not in VALID_INTEREST_TYPES:
+            raise ValueError(f"interest_type must be one of: {sorted(VALID_INTEREST_TYPES)}")
+        if t == "country":
+            if not re.fullmatch(r"[A-Z]{2}", v.upper()):
+                raise ValueError("country must be a 2-letter ISO alpha-2 code (e.g. GB, US, DE)")
+            return v.upper()
+        if t == "hs_chapter":
+            if not re.fullmatch(r"\d{2}", v):
+                raise ValueError("hs_chapter must be a 2-digit number (e.g. 72)")
+            return v
+        if t == "hs_heading":
+            if not re.fullmatch(r"\d{4}", v):
+                raise ValueError("hs_heading must be a 4-digit number (e.g. 7208)")
+            return v
+        if t == "hs_code":
+            if not re.fullmatch(r"\d{6,10}", v):
+                raise ValueError("hs_code must be 6–10 digits")
+            return v
+        return v  # party_name / industry — free text
 
 
 # ---------------------------------------------------------------------------
@@ -363,3 +396,33 @@ class PersonalizedSummaryOut(BaseModel):
     summary: str              # AI-generated summary tailored to org interests
     relevant_interests: list[str]  # which interests matched
     general_summary: str | None    # original enrichment summary for comparison
+
+
+# ---------------------------------------------------------------------------
+# Interest type catalogue
+# ---------------------------------------------------------------------------
+
+class InterestTypeOption(BaseModel):
+    type: str
+    label: str
+    description: str
+    example: str
+    format_hint: str
+
+
+# ---------------------------------------------------------------------------
+# Source preferences per org
+# ---------------------------------------------------------------------------
+
+class OrgSourcePreferenceOut(BaseModel):
+    id: uuid.UUID
+    source_id: uuid.UUID
+    source_name: str
+    is_enabled: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class OrgSourcePreferencePatch(BaseModel):
+    is_enabled: bool
