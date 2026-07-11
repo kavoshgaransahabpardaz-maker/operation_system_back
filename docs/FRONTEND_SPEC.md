@@ -655,28 +655,39 @@ apiClient.interceptors.response.use(
 ### `src/api/auth.ts`
 ```typescript
 export const authApi = {
-  login: (email: string, password: string) =>
-    apiClient.post<TokenResponse>('/api/v1/auth/login', { email, password }),
+  // Sign in with Google — sends Google ID token, receives our JWT
+  googleLogin: (credential: string) =>
+    apiClient.post<TokenResponse>('/api/v1/auth/google', { credential }),
 
-  register: (data: { email: string; password: string; org_name: string; org_slug: string }) =>
-    apiClient.post<User>('/api/v1/auth/register', data),
+  // Create a new org + admin using Google ID token
+  registerWithGoogle: (data: { credential: string; org_name: string; org_slug: string }) =>
+    apiClient.post<User>('/api/v1/auth/register-with-google', data),
 
   me: () => apiClient.get<User>('/api/v1/auth/me'),
 
   listUsers: () => apiClient.get<User[]>('/api/v1/auth/users'),
 
-  createUser: (data: { email: string; password: string; role?: UserRole }) =>
+  // Invite a user — they sign in via Google using this email
+  createUser: (data: { email: string; role?: UserRole }) =>
     apiClient.post<User>('/api/v1/auth/users', data),
 
   updateUser: (userId: string, data: { role?: UserRole; is_active?: boolean }) =>
     apiClient.patch<User>(`/api/v1/auth/users/${userId}`, data),
-
-  requestPasswordReset: (email: string) =>
-    apiClient.post<{ reset_token: string; message: string }>('/api/v1/auth/password-reset', { email }),
-
-  confirmPasswordReset: (token: string, new_password: string) =>
-    apiClient.post<{ status: string }>('/api/v1/auth/password-reset/confirm', { token, new_password }),
 };
+```
+
+**NPM package required**: `@react-oauth/google` — Google's official React Sign-In button.
+
+```bash
+npm install @react-oauth/google
+```
+
+Wrap the app root in `<GoogleOAuthProvider clientId={import.meta.env.VITE_GOOGLE_CLIENT_ID}>`.
+
+```
+# .env
+VITE_API_URL=http://localhost:8000
+VITE_GOOGLE_CLIENT_ID=<your Google OAuth 2.0 client ID>
 ```
 
 ### `src/api/documents.ts`
@@ -1152,10 +1163,8 @@ Use `createBrowserRouter` with the following route tree.
 
 | Path | Component | Auth required | Notes |
 |---|---|---|---|
-| `/login` | `LoginPage` | No | Redirect to `/` if already logged in |
-| `/register` | `RegisterPage` | No | |
-| `/forgot-password` | `ForgotPasswordPage` | No | |
-| `/reset-password` | `ResetPasswordPage` | No | reads `?token=` from query string |
+| `/login` | `LoginPage` | No | Google Sign-In. Redirect to `/` if already logged in |
+| `/register` | `RegisterPage` | No | Google Sign-In + org name/slug form |
 | `/` | `DashboardPage` | Yes | Default route |
 | `/documents` | `DocumentListPage` | Yes | |
 | `/documents/:id` | `DocumentDetailPage` | Yes | |
@@ -1208,37 +1217,46 @@ Active route highlights with a filled background. Sidebar shows the org name at 
 
 ### 8.1 Login Page (`/login`)
 
-**Fields**: email, password  
-**Submit**: `POST /api/v1/auth/login` → store `access_token` in `localStorage` → navigate to `/`  
-**Errors**: Show field-level errors from Zod, show API error message below the form  
-**Links**: "Don't have an account? Register" → `/register`, "Forgot password?" → `/forgot-password`
+**Layout**: Centered card. App logo above. Single call-to-action.
+
+```
+┌──────────────────────────────────┐
+│          BrokerAI                │
+│                                  │
+│  [G]  Sign in with Google        │
+│                                  │
+│  Don't have an organisation?     │
+│  Set one up →  /register         │
+└──────────────────────────────────┘
+```
+
+**Flow**:
+1. Render `<GoogleLogin>` from `@react-oauth/google`
+2. On success → `googleLogin(response.credential)` → `POST /api/v1/auth/google`
+3. Store `access_token` in `localStorage` → navigate to `/`
+4. On API 401 ("No account found…"): show error banner: *"No BrokerAI account linked to this Google address. Ask your admin to invite you."*
+
+**Redirect**: if `localStorage.access_token` already exists on page load, redirect to `/` immediately.
 
 ---
 
 ### 8.2 Register Page (`/register`)
 
-**Fields**: email, password, org name, org slug  
-**Org slug**: auto-generated from org name (lowercase, hyphens) but user-editable  
-**Submit**: `POST /api/v1/auth/register` → on success redirect to `/login` with success toast  
-**Link**: "Already have an account? Login" → `/login`
+Used only when setting up a **new organisation**. Existing users go to `/login`.
 
----
+**Step 1** — Google sign-in:
+- Render `<GoogleLogin>` button
+- On success: capture `credential`, auto-fill email from the decoded token (display only, not editable)
 
-### 8.3 Forgot Password Page (`/forgot-password`)
+**Step 2** — Organisation details (shown after successful Google sign-in):
+- **Organisation name** — text input
+- **Organisation slug** — auto-generated from name (lowercase, hyphens), user-editable
+- "Create Organisation" button → `POST /api/v1/auth/register-with-google` with `{ credential, org_name, org_slug }`
+- On 409 "slug taken": show error under slug field
+- On 409 "email exists": show "An account with this Google email already exists — try signing in"
+- On success: store `access_token` (issue a follow-up `POST /api/v1/auth/google` with the same credential) → navigate to `/`
 
-**Fields**: email  
-**Submit**: `POST /api/v1/auth/password-reset`  
-**On success**: Show the returned `reset_token` in a highlighted code block with a note: *"In production this is emailed to you. Copy this token to reset your password."*  
-**Link**: "Back to login" → `/login`
-
----
-
-### 8.4 Reset Password Page (`/reset-password`)
-
-**Reads**: `?token=` query param (pre-fills the token field, read-only)  
-**Fields**: token (read-only if from URL), new password, confirm password  
-**Submit**: `POST /api/v1/auth/password-reset/confirm`  
-**On success**: Toast "Password updated" → redirect to `/login`
+**Link**: "Already have an account? Sign in" → `/login`
 
 ---
 
@@ -1626,9 +1644,10 @@ Calls `GET /api/v1/auth/users`.
 **Active toggle**: Switch per row. On toggle → `PATCH /api/v1/auth/users/:id` with `{ is_active }`.
 
 **Invite User Dialog**:
-Fields: email, password (temporary), role (default: Operator)  
-Submit → `POST /api/v1/auth/users`  
-On success: close dialog, refresh list, toast "User invited"
+Fields: email, role (default: Operator) — **no password**  
+Note below form: *"The invited user will sign in using Google with this email address."*  
+Submit → `POST /api/v1/auth/users` with `{ email, role }`  
+On success: close dialog, refresh list, toast "User invited — they can now sign in with Google"
 
 ---
 
@@ -1806,10 +1825,22 @@ export const queryKeys = {
 
 ## 11. Auth Flow
 
-1. On app start, `useCurrentUser` hook calls `GET /api/v1/auth/me` using `useQuery`.
-2. If 401, the axios interceptor clears `localStorage` and redirects to `/login`.
-3. On successful login, store `access_token` in `localStorage`, then navigate to `/`.
-4. Logout: clear `localStorage.access_token`, call `queryClient.clear()`, navigate to `/login`.
+**Sign-in with Google (primary path)**:
+1. User lands on `/login`, clicks the Google button (`<GoogleLogin>` from `@react-oauth/google`)
+2. Google returns a `credential` (ID token string)
+3. Frontend calls `POST /api/v1/auth/google` with `{ credential }`
+4. Backend verifies the token via Google's tokeninfo API, finds the user by email, returns our JWT
+5. Store `access_token` in `localStorage` → navigate to `/`
+
+**Session check on app start**:
+- `useCurrentUser` calls `GET /api/v1/auth/me`; on 401 the axios interceptor clears localStorage and redirects to `/login`
+
+**Logout**: clear `localStorage.access_token`, call `queryClient.clear()`, navigate to `/login`
+
+**Register new org**:
+1. `/register` page → user clicks Google button → gets `credential`
+2. User fills org name + slug → submit `POST /api/v1/auth/register-with-google`
+3. On success → immediately call `POST /api/v1/auth/google` with same credential → store JWT → navigate to `/`
 
 ```typescript
 // src/hooks/useCurrentUser.ts
@@ -1820,6 +1851,16 @@ export function useCurrentUser() {
     retry: false,
   });
 }
+```
+
+**Wrap the app root**:
+```tsx
+// src/main.tsx
+import { GoogleOAuthProvider } from '@react-oauth/google';
+
+<GoogleOAuthProvider clientId={import.meta.env.VITE_GOOGLE_CLIENT_ID}>
+  <App />
+</GoogleOAuthProvider>
 ```
 
 ---
@@ -1862,7 +1903,7 @@ Implement in this order to deliver value incrementally:
 1. **Project scaffold**: Vite + React + TypeScript + Tailwind + shadcn/ui setup
 2. **API client**: `src/api/client.ts` with auth interceptor
 3. **Types**: `src/types/index.ts`
-4. **Auth pages**: Login, Register, Forgot Password, Reset Password
+4. **Auth pages**: Login (Google button), Register (Google + org form)
 5. **AppShell + Sidebar + routing skeleton**
 6. **Dashboard page**
 7. **Document List + Upload**
@@ -1881,6 +1922,10 @@ Implement in this order to deliver value incrementally:
 
 ## 16. Key Business Rules (enforce in UI)
 
+- **Authentication is Google-only**. Never render an email+password login form. The only sign-in control is `<GoogleLogin>` from `@react-oauth/google`.
+- **No password fields anywhere** — not in login, register, or invite dialogs. Passwords are not stored for any new account.
+- **Invited users**: the admin provides only email + role. The user authenticates via Google using that email. If a user's Google account email doesn't match their invited email, they see "No account found" and must ask their admin.
+- **`VITE_GOOGLE_CLIENT_ID` must be set** in `.env`. If missing, the Google button will not render — show a config error in development mode.
 - Max upload size is **50 MB**. Reject larger files client-side before calling the API.
 - On a **409 Conflict** from upload, show "Duplicate file detected" and link to the existing document.
 - The **"Override Classification"** button is always visible on Document Detail, even when no classification exists yet.

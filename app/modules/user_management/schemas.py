@@ -29,8 +29,17 @@ class UserRegister(BaseModel):
 
 class UserCreate(BaseModel):
     email: EmailStr
-    password: str
     role: UserRole = UserRole.OPERATOR
+
+
+class GoogleAuthRequest(BaseModel):
+    credential: str  # Google ID token from the frontend Sign-In button
+
+
+class GoogleRegisterRequest(BaseModel):
+    credential: str  # Google ID token
+    org_name: str
+    org_slug: str
 
 
 class UserOut(BaseModel):

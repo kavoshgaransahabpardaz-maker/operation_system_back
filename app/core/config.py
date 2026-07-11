@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str
     OPENAI_MODEL: str = "gpt-4o-mini"
 
+    GOOGLE_CLIENT_ID: str = ""  # Google OAuth client ID for Sign-in with Google
+
     GMAIL_CLIENT_ID: str = ""
     GMAIL_CLIENT_SECRET: str = ""
     GMAIL_REDIRECT_URI: str = "http://localhost:8000/api/v1/email/oauth/gmail/callback"

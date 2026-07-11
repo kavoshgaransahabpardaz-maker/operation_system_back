@@ -3,13 +3,70 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.security import create_access_token, hash_password, verify_password
 from app.modules.user_management.models import Organization, PasswordResetToken, User, UserRole
 from app.modules.user_management.schemas import LoginRequest, OrgCreate, UserCreate, UserRegister, UserUpdate
+
+
+async def verify_google_token(credential: str) -> dict:
+    """Verify a Google ID token via Google's tokeninfo endpoint and return the payload."""
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": credential},
+        )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Google token")
+    info = resp.json()
+    if settings.GOOGLE_CLIENT_ID and info.get("aud") != settings.GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Google token audience mismatch")
+    email = info.get("email")
+    if not email or not info.get("email_verified"):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Google account email not verified")
+    return info
+
+
+async def google_login(db: AsyncSession, credential: str) -> str:
+    info = await verify_google_token(credential)
+    email = info["email"]
+    result = await db.execute(select(User).where(User.email == email, User.is_active == True))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No account found for this Google account. Ask your admin to invite you.",
+        )
+    return create_access_token({"sub": str(user.id), "org_id": str(user.org_id), "role": user.role})
+
+
+async def google_register_org(db: AsyncSession, credential: str, org_name: str, org_slug: str) -> tuple[Organization, User]:
+    info = await verify_google_token(credential)
+    email = info["email"]
+
+    existing_slug = await db.execute(select(Organization).where(Organization.slug == org_slug))
+    if existing_slug.scalar_one_or_none():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Organization slug already taken")
+
+    existing_email = await db.execute(select(User).where(User.email == email))
+    if existing_email.scalar_one_or_none():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An account with this Google email already exists")
+
+    org = Organization(name=org_name, slug=org_slug)
+    db.add(org)
+    await db.flush()
+
+    user = User(email=email, password_hash=None, org_id=org.id, role=UserRole.ADMIN)
+    db.add(user)
+    await db.commit()
+    await db.refresh(org)
+    await db.refresh(user)
+    return org, user
 
 
 async def register_org_and_admin(db: AsyncSession, data: UserRegister) -> tuple[Organization, User]:
@@ -50,12 +107,7 @@ async def create_user(db: AsyncSession, org_id: uuid.UUID, data: UserCreate) -> 
     existing = await db.execute(select(User).where(User.email == data.email, User.org_id == org_id))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered in this org")
-    user = User(
-        email=data.email,
-        password_hash=hash_password(data.password),
-        org_id=org_id,
-        role=data.role,
-    )
+    user = User(email=data.email, password_hash=None, org_id=org_id, role=data.role)
     db.add(user)
     await db.commit()
     await db.refresh(user)
