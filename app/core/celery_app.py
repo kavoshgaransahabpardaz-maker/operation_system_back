@@ -10,6 +10,7 @@ celery_app = Celery(
     include=[
         "app.agents.email_collector.tasks",
         "app.agents.document_classifier.tasks",
+        "app.agents.field_extractor.tasks",
         "app.agents.shipment_matcher.tasks",
         "app.agents.intel_collector.tasks",
     ],
