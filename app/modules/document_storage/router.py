@@ -68,3 +68,12 @@ async def get_duplicates(
     db: AsyncSession = Depends(get_async_db),
 ):
     return await service.list_duplicates(db, current_user.org_id, document_id)
+
+
+@router.delete("/{document_id}", status_code=204)
+async def delete_document(
+    document_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    await service.delete_document(db, current_user.org_id, document_id)

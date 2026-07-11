@@ -180,3 +180,28 @@ async def set_shipment(db: AsyncSession, document_id: uuid.UUID, shipment_id: uu
     if doc:
         doc.shipment_id = shipment_id
         await db.commit()
+
+
+async def delete_document(db: AsyncSession, org_id: uuid.UUID, document_id: uuid.UUID) -> None:
+    from sqlalchemy import delete as sql_delete
+    from app.modules.document_classification.models import ClassificationResult
+    from app.modules.ocr_processing.models import OcrResult
+    from app.modules.field_extraction.models import ExtractedField
+    from app.modules.shipment_identification.models import ShipmentDocument
+
+    doc = await get_document(db, org_id, document_id)
+
+    # Remove related rows in dependency order
+    await db.execute(sql_delete(ExtractedField).where(ExtractedField.document_id == document_id))
+    await db.execute(sql_delete(ClassificationResult).where(ClassificationResult.document_id == document_id))
+    await db.execute(sql_delete(OcrResult).where(OcrResult.document_id == document_id))
+    await db.execute(sql_delete(DocumentVersion).where(DocumentVersion.document_id == document_id))
+    await db.execute(sql_delete(ShipmentDocument).where(ShipmentDocument.document_id == document_id))
+    await db.execute(sql_delete(Document).where(Document.id == document_id))
+    await db.commit()
+
+    # Delete file from object storage (after DB commit so failure doesn't leave orphan rows)
+    try:
+        storage.delete_file(doc.file_key)
+    except Exception:
+        pass  # S3 delete failure is non-fatal; the DB row is already gone

@@ -57,6 +57,15 @@ async def update_shipment(
     return await service.update_shipment_status(db, current_user.org_id, shipment_id, data.status)
 
 
+@router.delete("/{shipment_id}", status_code=204)
+async def delete_shipment(
+    shipment_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    await service.delete_shipment(db, current_user.org_id, shipment_id)
+
+
 @router.post("/documents/{document_id}/reassociate", status_code=204)
 async def reassociate_document(
     document_id: uuid.UUID,

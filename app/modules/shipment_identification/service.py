@@ -414,3 +414,45 @@ async def update_shipment_status(
         .options(selectinload(Shipment.references))
     )
     return result2.scalar_one()
+
+
+async def delete_shipment(db: AsyncSession, org_id: uuid.UUID, shipment_id: uuid.UUID) -> None:
+    from sqlalchemy import delete as sql_delete, update as sql_update
+    from app.modules.flags.models import Flag, FlagResolution
+    from app.modules.field_extraction.models import ExtractedField
+    from app.modules.intel.models import IntelMatch
+
+    result = await db.execute(
+        select(Shipment).where(Shipment.id == shipment_id, Shipment.org_id == org_id)
+    )
+    shipment = result.scalar_one_or_none()
+    if not shipment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found")
+
+    # Unlink documents (clear their shipment_id, keep the documents themselves)
+    await db.execute(
+        sql_update(Document)
+        .where(Document.shipment_id == shipment_id)
+        .values(shipment_id=None)
+    )
+    # Nullify shipment_id on extracted fields
+    await db.execute(
+        sql_update(ExtractedField)
+        .where(ExtractedField.shipment_id == shipment_id)
+        .values(shipment_id=None)
+    )
+    # Delete flag resolutions first (FK to flags)
+    flag_ids_result = await db.execute(
+        select(Flag.id).where(Flag.shipment_id == shipment_id)
+    )
+    flag_ids = [r[0] for r in flag_ids_result.all()]
+    if flag_ids:
+        await db.execute(sql_delete(FlagResolution).where(FlagResolution.flag_id.in_(flag_ids)))
+    await db.execute(sql_delete(Flag).where(Flag.shipment_id == shipment_id))
+    # Delete intel matches
+    await db.execute(sql_delete(IntelMatch).where(IntelMatch.shipment_id == shipment_id))
+    # Delete shipment join tables
+    await db.execute(sql_delete(ShipmentDocument).where(ShipmentDocument.shipment_id == shipment_id))
+    await db.execute(sql_delete(ShipmentReference).where(ShipmentReference.shipment_id == shipment_id))
+    await db.execute(sql_delete(Shipment).where(Shipment.id == shipment_id))
+    await db.commit()
