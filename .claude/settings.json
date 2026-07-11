@@ -77,7 +77,21 @@
       "Bash(ssh -o StrictHostKeyChecking=no root@78.129.155.206 \"docker exec operation_system_back-api-1 curl -s -X POST http://localhost:8000/api/v1/auth/login -H 'Content-Type: application/json' -d '{\\\\\"email\\\\\":\\\\\"behnam@veritariffai.co\\\\\",\\\\\"password\\\\\":\\\\\"Behnam_2829\\\\\"}' | head -c 300\")",
       "Bash(ssh -o StrictHostKeyChecking=no root@78.129.155.206 \"docker exec operation_system_back-postgres-1 psql -U broker -d brokerai -c \\\\\"SELECT email, role FROM users LIMIT 5;\\\\\"\")",
       "Bash(ssh -o StrictHostKeyChecking=no root@78.129.155.206 \"docker exec operation_system_back-postgres-1 psql -U broker -d brokerai -c \\\\\"SELECT name, health_status, articles_collected, last_error FROM intel_sources ORDER BY name;\\\\\"\")",
-      "Bash(ssh -o StrictHostKeyChecking=no root@78.129.155.206 \"docker exec operation_system_back-postgres-1 psql -U broker -d brokerai -c \\\\\"SELECT COUNT\\(*\\) FROM intel_articles; SELECT COUNT\\(*\\) FROM intel_enrichments; SELECT processing_status, COUNT\\(*\\) FROM intel_articles GROUP BY processing_status;\\\\\"\")"
+      "Bash(ssh -o StrictHostKeyChecking=no root@78.129.155.206 \"docker exec operation_system_back-postgres-1 psql -U broker -d brokerai -c \\\\\"SELECT COUNT\\(*\\) FROM intel_articles; SELECT COUNT\\(*\\) FROM intel_enrichments; SELECT processing_status, COUNT\\(*\\) FROM intel_articles GROUP BY processing_status;\\\\\"\")",
+      "Bash(rtk grep *)",
+      "Bash(rtk read *)",
+      "Bash(rtk ls *)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('app/modules/intel/router.py'\\).read\\(\\)\\); print\\('router OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('app/modules/intel/models.py'\\).read\\(\\)\\); print\\('models OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('app/modules/intel/schemas.py'\\).read\\(\\)\\); print\\('schemas OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('app/modules/org_settings/models.py'\\).read\\(\\)\\); print\\('org_settings models OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('app/modules/org_settings/schemas.py'\\).read\\(\\)\\); print\\('org_settings schemas OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('app/modules/intel/router.py'\\).read\\(\\)\\); ast.parse\\(open\\('app/modules/intel/models.py'\\).read\\(\\)\\); ast.parse\\(open\\('app/modules/intel/schemas.py'\\).read\\(\\)\\); ast.parse\\(open\\('app/modules/org_settings/models.py'\\).read\\(\\)\\); ast.parse\\(open\\('app/modules/org_settings/schemas.py'\\).read\\(\\)\\); print\\('All files OK'\\)\")",
+      "Bash(rtk git *)",
+      "Bash(git commit -m ' *)",
+      "Bash(ssh root@78.129.155.206 \"cd /opt/operation_system_back && git pull && docker compose -f docker-compose.prod.yml up -d --build api worker\")",
+      "Bash(ssh root@78.129.155.206 \"docker logs operation_system_back-migrate-1 2>&1 | tail -20\")",
+      "Bash(ssh root@78.129.155.206 \"sleep 5 && curl -s http://localhost:8000/health\")"
     ],
     "additionalDirectories": [
       "/Users/behnam/vscode/veritariffai-back"

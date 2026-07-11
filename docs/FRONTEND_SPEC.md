@@ -217,6 +217,9 @@ export interface OrgSettings {
   weight_qty_tolerance_pct: number;   // default 0.5 (= 0.5%)
   value_tolerance_pct: number;        // default 1.0 (= 1.0%)
   name_match_threshold: number;       // default 0.93 (= 93%)
+  doc_organization_by: 'shipment' | 'client' | 'lane' | 'date';  // default 'shipment'
+  auto_fix_threshold: number;         // 0.5–1.0, default 0.95
+  email_critical_alerts: boolean;     // default true
   created_at: string;
   updated_at: string;
 }
@@ -371,9 +374,9 @@ export type IntelEventType =
   | 'market_notice'
   | 'other';
 
-export type InterestType = 'hs_chapter' | 'hs_heading' | 'country' | 'party_name';
+export type InterestType = 'hs_chapter' | 'hs_heading' | 'hs_code' | 'country' | 'party_name' | 'industry';
 
-export type AlertDeliveryType = 'email' | 'in_app';
+export type AlertDeliveryType = 'email';
 
 export type AlertDeliveryStatus = 'sent' | 'failed';
 
@@ -496,9 +499,76 @@ export interface NotificationPreference {
   user_id: string;
   min_impact_score: number;        // 1–5; articles below this are not alerted
   event_types: IntelEventType[];   // empty = all event types
-  delivery_channels: ('email' | 'in_app')[];
+  delivery_channels: ('email')[];  // in_app removed — only email delivery supported
   is_active: boolean;
   created_at: string;
+}
+
+// ── NEW: Article feedback ──────────────────────────────────────────────────
+
+export interface ArticleFeedback {
+  id: string;
+  article_id: string;
+  user_id: string;
+  feedback: 'like' | 'dislike';
+  comment: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MyFeedback {
+  feedback: 'like' | 'dislike' | null;
+  comment: string | null;
+}
+
+// ── NEW: Interest type catalogue ───────────────────────────────────────────
+
+export interface InterestTypeOption {
+  type: InterestType;
+  label: string;
+  description: string;
+  example: string;
+  format_hint: string;
+}
+
+// ── NEW: Source preference per org ────────────────────────────────────────
+
+export interface OrgSourcePreference {
+  id: string;
+  source_id: string;
+  source_name: string;
+  is_enabled: boolean;
+  created_at: string;
+}
+
+// ── NEW: Feed filter options ───────────────────────────────────────────────
+
+export interface ImpactLevel {
+  level: number;           // 1–5
+  label: string;
+  description: string;
+}
+
+export interface EventTypeOption {
+  value: IntelEventType;
+  label: string;
+  description: string;
+}
+
+export interface FilterOptions {
+  countries: string[];             // ISO alpha-2 codes seen in recent articles
+  industries: string[];
+  event_types: EventTypeOption[];
+  impact_scale: ImpactLevel[];
+}
+
+// ── NEW: Personalized summary ──────────────────────────────────────────────
+
+export interface PersonalizedSummary {
+  article_id: string;
+  summary: string;                 // AI summary tailored to org interests
+  relevant_interests: string[];    // which interests matched
+  general_summary: string | null;  // original enrichment summary for comparison
 }
 
 export interface HeatmapEntry {
@@ -734,7 +804,12 @@ export const orgSettingsApi = {
   get: () => apiClient.get<OrgSettings>('/api/v1/org/settings'),
 
   update: (data: Partial<Pick<OrgSettings,
-    'weight_qty_tolerance_pct' | 'value_tolerance_pct' | 'name_match_threshold'
+    | 'weight_qty_tolerance_pct'
+    | 'value_tolerance_pct'
+    | 'name_match_threshold'
+    | 'doc_organization_by'
+    | 'auto_fix_threshold'
+    | 'email_critical_alerts'
   >>) => apiClient.patch<OrgSettings>('/api/v1/org/settings', data),
 };
 ```
@@ -743,7 +818,15 @@ export const orgSettingsApi = {
 ```typescript
 export const intelApi = {
   // Personalised feed — articles matched to the org's interests/shipments first
-  feed: (params?: { limit?: number; offset?: number; event_type?: IntelEventType; min_impact?: number }) =>
+  feed: (params?: {
+    limit?: number;
+    offset?: number;
+    event_type?: IntelEventType;
+    min_impact?: number;
+    country?: string;        // ISO alpha-2
+    industry?: string;
+    matched_only?: boolean;
+  }) =>
     apiClient.get<IntelFeedItem[]>('/api/v1/intel/feed', { params }),
 
   // Full-text keyword search over articles
@@ -830,6 +913,41 @@ export const intelApi = {
     apiClient.post<{ status: string; article_id: string; title: string }>(
       `/api/v1/intel/admin/reprocess/${articleId}`
     ),
+
+  // Feed filter options (countries, industries, event types, impact scale)
+  getFilterOptions: () =>
+    apiClient.get<FilterOptions>('/api/v1/intel/filter-options'),
+
+  // Article feedback — like / dislike
+  getMyFeedback: (articleId: string) =>
+    apiClient.get<MyFeedback>(`/api/v1/intel/articles/${articleId}/feedback`),
+
+  submitFeedback: (articleId: string, data: { feedback: 'like' | 'dislike'; comment?: string }) =>
+    apiClient.post<ArticleFeedback>(`/api/v1/intel/articles/${articleId}/feedback`, data),
+
+  deleteFeedback: (articleId: string) =>
+    apiClient.delete(`/api/v1/intel/articles/${articleId}/feedback`),
+
+  // AI-generated summary tailored to the org's interest profile
+  getPersonalizedSummary: (articleId: string) =>
+    apiClient.get<PersonalizedSummary>(`/api/v1/intel/articles/${articleId}/personalized-summary`),
+
+  // Interest type catalogue (for dropdown labels, format hints, validation)
+  listInterestTypes: () =>
+    apiClient.get<InterestTypeOption[]>('/api/v1/intel/interest-types'),
+
+  // Knowledge graph stats
+  knowledgeGraphStats: () =>
+    apiClient.get<{ total_relations: number; by_predicate: Record<string, number>; by_subject_type: Record<string, number> }>(
+      '/api/v1/intel/knowledge-graph/stats'
+    ),
+
+  // Source preferences — per-org enable/disable news sources
+  listMySourcePreferences: () =>
+    apiClient.get<OrgSourcePreference[]>('/api/v1/intel/sources/my-preferences'),
+
+  updateSourcePreference: (sourceId: string, is_enabled: boolean) =>
+    apiClient.patch<OrgSourcePreference>(`/api/v1/intel/sources/${sourceId}/preference`, { is_enabled }),
 };
 ```
 
@@ -1009,8 +1127,20 @@ export const IMPACT_SCORE_COLORS: Record<number, string> = {
 export const INTEREST_TYPE_LABELS: Record<InterestType, string> = {
   hs_chapter: 'HS Chapter',
   hs_heading: 'HS Heading',
+  hs_code: 'HS Code',
   country: 'Country',
   party_name: 'Party Name',
+  industry: 'Industry',
+};
+
+// Format hints shown below the value input in AddInterestDialog
+export const INTEREST_TYPE_FORMAT_HINTS: Record<InterestType, string> = {
+  hs_chapter: '2-digit number, e.g. 72',
+  hs_heading: '4-digit number, e.g. 7208',
+  hs_code: '6–10 digit number, e.g. 720851',
+  country: '2-letter ISO alpha-2 code, e.g. GB',
+  party_name: 'Free text, e.g. Acme Steel Ltd',
+  industry: 'Free text, e.g. Automotive',
 };
 ```
 
@@ -1524,6 +1654,16 @@ Form fields:
 
 Note: `name_match_threshold` is stored as 0.0–1.0 on the backend (e.g. 0.93). Display as percentage (93%). Convert on submit: `value / 100`.
 
+**Orchestration Settings Card** (new section below Tolerance Settings)
+
+| Field | Label | Notes |
+|---|---|---|
+| `doc_organization_by` | Organise documents by | Select: Shipment / Client / Lane / Date. Default: Shipment |
+| `auto_fix_threshold` | Auto-fix confidence threshold | Slider or number input, 50–100%, step 1. Displayed as %. Default 95%. Store as 0.0–1.0 on submit (÷ 100). |
+| `email_critical_alerts` | Email me for critical trade events | Toggle switch. When on, emails are sent for articles with `impact_score ≥ 4`. |
+
+Description: *"When auto-fix confidence exceeds the threshold, mismatches are resolved automatically. Set higher to require more certainty before auto-fixing."*
+
 **"Save Settings"** button → `PATCH /api/v1/org/settings`  
 On success: toast "Settings saved", invalidate settings query.
 
@@ -1642,6 +1782,12 @@ export const queryKeys = {
   intelAlerts: ['intelAlerts'],
   intelSources: ['intelSources'],
   flagSuggestions: (flagId: string) => ['flagSuggestions', flagId],
+  intelFilterOptions: ['intelFilterOptions'],
+  intelInterestTypes: ['intelInterestTypes'],
+  articleFeedback: (articleId: string) => ['articleFeedback', articleId],
+  personalizedSummary: (articleId: string) => ['personalizedSummary', articleId],
+  mySourcePreferences: ['mySourcePreferences'],
+  knowledgeGraphStats: ['knowledgeGraphStats'],
 };
 ```
 
@@ -1750,6 +1896,12 @@ Implement in this order to deliver value incrementally:
 - `name_match_threshold` is stored as 0.0–1.0. Always display as a percentage (multiply by 100) in the UI.
 - **Suggestions are never auto-applied**: only show them as pre-fill options in the resolve dialog. The user must explicitly click and submit.
 - **Intel HS codes**: only displayed when `hs_chapters` / `hs_headings` arrays are non-empty. Never infer HS codes from article text in the UI.
+- **Interest validation**: validate client-side before submitting. Country must be 2-letter uppercase ISO alpha-2 (e.g. "GB"). HS chapter = 2 digits, HS heading = 4 digits, HS code = 6–10 digits. Show inline error from `INTEREST_TYPE_FORMAT_HINTS`; on 422 from API, show `detail` message.
+- **`hs_code` vs `hs_heading`**: "7208" is a 4-digit HS heading, NOT a country. If the user picks type=country and types "7208" the UI must reject it with a format error before the API is called.
+- **Source preferences**: disabling a source hides its articles from the feed for the whole org. The admin source list (`/intel/sources`) still shows all sources; the preferences page is for feed curation only.
+- **Article feedback**: submitting feedback does not re-rank the feed. It is for product analytics only. Never show aggregate like/dislike counts to users.
+- **`auto_fix_threshold`**: stored as 0.0–1.0, display and accept as percentage (0–100). Clamp to 50–100% in the UI (backend enforces ge=0.5, le=1.0).
+- **`in_app` delivery channel**: removed. Never show "In-App" as a notification channel option in any form or settings page.
 - **Sanctions flags** (`flag_type=mismatch`, `severity=critical`, title contains "Sanctions"): highlight with a distinct red banner on Shipment Detail. Never dismiss silently.
 - **Interest profile**: `is_explicit=false` interests are shown with a dimmed style and a tooltip "Auto-detected from your shipment history". They cannot be deleted — only explicit interests can be removed.
 - **Tabular files** (XLS/XLSX/CSV/XML): upload is supported (same upload UI). Show a spreadsheet icon (`Sheet`) instead of `FileText` for these content types.
@@ -1764,9 +1916,15 @@ Calls `GET /api/v1/intel/feed` with `refetchInterval: 300_000`.
 
 **Header**: "Trade Intelligence" title + search input (navigates to `/intel/search?q=...`) + "My Interests" button (opens interests panel)
 
-**Filter bar**:
-- Event type filter: All | Tariff Change | Sanctions | Regulation | Trade Agreement | Market Notice
-- Min impact filter: All | High (≥4) | Critical (5)
+**Filter bar**: load options from `GET /api/v1/intel/filter-options` (`queryKeys.intelFilterOptions`).
+
+- **Event type** — All + options from `filter_options.event_types` (use `label` as display, `value` as param)
+- **Country** — "All countries" + sorted list from `filter_options.countries`; validated ISO alpha-2 only
+- **Industry** — "All industries" + list from `filter_options.industries`
+- **Min impact** — All | ≥3 | ≥4 | ≥5 (use `filter_options.impact_scale` labels for tooltips)
+- **Matched only** — Toggle: "My shipments only" (sends `matched_only=true`)
+
+Pass active filters to `intelApi.feed(params)`.
 
 **Feed layout**: card list, newest matched articles first.
 
@@ -1920,12 +2078,26 @@ HS Chapters       HS Headings       Countries        Party Names
 - "+" button per group → opens `AddInterestDialog`
 
 **Add Interest Dialog**:
-- `interest_type` select: HS Chapter / HS Heading / Country / Party Name
-- `value` text input (e.g. "72", "7208", "GB", "Acme Steel")
+- Load types from `GET /api/v1/intel/interest-types` (or use `INTEREST_TYPE_LABELS` / `INTEREST_TYPE_FORMAT_HINTS` from constants if pre-loaded)
+- `interest_type` select: HS Chapter / HS Heading / HS Code / Country / Party Name / Industry
+- `value` text input with format hint below from `InterestTypeOption.format_hint`
+- Client-side validation before submitting:
+  - **country** — must match `[A-Z]{2}` (uppercased). Show error: "Use a 2-letter ISO code, e.g. GB"
+  - **hs_chapter** — must be exactly 2 digits
+  - **hs_heading** — must be exactly 4 digits
+  - **hs_code** — must be 6–10 digits
+  - **party_name / industry** — free text, non-empty
 - Submit → `POST /api/v1/intel/interests`
+- On 422: show the `detail` error message below the value input
 - On success: invalidate interests query, toast "Interest added"
 
 **Delete**: clicking × on an explicit interest → `DELETE /api/v1/intel/interests/:id` → toast "Interest removed"
+
+**Interest types displayed** (update layout to include new types):
+```
+HS Chapters   HS Headings   HS Codes    Countries    Party Names    Industries
+[72] [+]      [7208] [+]    [720851][+] [🇬🇧 GB] [+]  [Acme Ltd] [+]  [Steel] [+]
+```
 
 ---
 
@@ -1976,10 +2148,12 @@ An interactive node-link graph (use `react-force-graph` or similar; fallback to 
 Calls `GET /api/v1/intel/notifications/preferences` on load.
 
 **Form**:
-- **Min Impact Score** — slider 1–5 with label e.g. "Notify me for impact ≥ 3"
-- **Event Types** — multi-select checkboxes (all event types from `INTEL_EVENT_TYPE_LABELS`); empty = all
-- **Delivery Channels** — checkboxes: Email, In-App
+- **Min Impact Score** — slider 1–5 with label e.g. "Notify me for impact ≥ 3". Show the impact level description from `filter_options.impact_scale` as a subtitle.
+- **Event Types** — multi-select checkboxes (all event types from `INTEL_EVENT_TYPE_LABELS`); empty = all event types
+- **Delivery Channels** — Email only (in_app channel has been removed). Show a single "Email alerts" toggle.
 - **Active** — toggle switch
+
+**Note**: The `email_critical_alerts` toggle in Org Settings controls critical-event emails org-wide. This per-user preference controls which event types and impact levels trigger personal alerts.
 
 **Save** → `PATCH /api/v1/intel/notifications/preferences` with changed fields only → toast "Preferences saved"
 
@@ -2037,3 +2211,74 @@ Summary row above the sources table:
 - Articles ingested last 24h (sum of recent IntelJob `articles_processed`)
 
 Use distinct card chips with coloured borders for quick at-a-glance status.
+
+---
+
+### 17.14 Article Feedback (like / dislike)
+
+Shown on every `IntelArticleCard` in the feed and on the `IntelArticlePage`.
+
+On mount, call `GET /api/v1/intel/articles/:id/feedback` (`queryKeys.articleFeedback(id)`) to hydrate the current state.
+
+**Controls** (below the article summary):
+```
+[👍 Like]  [👎 Dislike]        ← toggle buttons; selected state is highlighted
+```
+
+- Clicking Like or Dislike when none is set → `POST /api/v1/intel/articles/:id/feedback` with `{ feedback: 'like'|'dislike' }`
+- Clicking the same button again → `DELETE /api/v1/intel/articles/:id/feedback` (unset)
+- Clicking the opposite button → `POST` with new value (upserts server-side)
+- Optional comment: clicking the active feedback button opens a small textarea for a comment. Submit updates the same POST endpoint.
+- Invalidate `articleFeedback(id)` after each mutation. Show toast only on error.
+
+---
+
+### 17.15 Personalized Summary
+
+On `IntelArticlePage`, show a "Personalized Summary" section after the enrichment section.
+
+- Lazy-load: show a "Get my summary" button. On click, call `GET /api/v1/intel/articles/:id/personalized-summary` (`queryKeys.personalizedSummary(id)`). Cache result (no polling).
+- While loading: spinner + "Generating summary tailored to your interests…"
+- On success:
+  ```
+  ✨ Summary for your interests
+  [summary text]
+
+  Relevant to: [HS 7208]  [Country: GB]  [Steel industry]   ← chips from relevant_interests
+  ```
+- If `general_summary` differs from the personalized one, show "General summary" below in collapsed format.
+- On error (e.g. no org interests configured): show "Add interests to your profile to get personalized summaries." with a link to the interests panel.
+
+---
+
+### 17.16 Source Preferences Page (`/intel/sources/preferences`)
+
+Accessible from the Feed page via a "Manage Sources" link (non-admin users can access this — it only affects their org's feed, not the global source list).
+
+Calls `GET /api/v1/intel/sources/my-preferences` (`queryKeys.mySourcePreferences`).
+
+**Header**: "News Sources" — "Choose which sources appear in your feed"
+
+**Layout**: grouped by `category` (Tariff / Sanctions / Regulation / Trade News).
+
+Each source row:
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  ● UK Sanctions (OFSI)        [sanctions]         [enabled ▼]   │
+│  ● GOV.UK Trade Tariffs       [tariff]            [enabled ▼]   │
+│  ● BIFA News                  [trade_news]        [disabled ▼]  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+- Toggle switch per source (`is_enabled`)
+- On toggle → `PATCH /api/v1/intel/sources/{source_id}/preference` with `{ is_enabled }` → invalidate `mySourcePreferences` + `intelFeed`
+- Disabled sources still appear in the list but are visually dimmed and excluded from the feed
+- `is_enabled: true` is the implicit default for sources with no preference record
+
+**Add to Sidebar**: add "Sources" as a sub-item under "Trade Intel" (visible to all roles).
+
+**Add to routing table**:
+
+| Path | Component | Auth required | Notes |
+|---|---|---|---|
+| `/intel/sources/preferences` | `IntelSourcePreferencesPage` | Yes | All roles — manage org feed sources |
