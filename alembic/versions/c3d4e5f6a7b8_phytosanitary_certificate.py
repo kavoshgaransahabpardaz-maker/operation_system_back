@@ -19,7 +19,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     # PostgreSQL requires this outside a transaction block for older versions.
     # IF NOT EXISTS is safe to run repeatedly.
-    op.execute("ALTER TYPE documenttype ADD VALUE IF NOT EXISTS 'phytosanitary_certificate'")
+    op.execute("ALTER TYPE documenttype ADD VALUE IF NOT EXISTS 'PHYTOSANITARY_CERTIFICATE'")
 
 
 def downgrade() -> None:
