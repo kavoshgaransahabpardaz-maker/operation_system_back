@@ -199,7 +199,7 @@ async def seed_builtin_sources(db) -> None:
 
     for spec in BUILTIN_SOURCES:
         result = await db.execute(
-            select(IntelSource).where(IntelSource.name == spec["name"])
+            select(IntelSource).where(IntelSource.name == spec["name"]).limit(1)
         )
         existing = result.scalar_one_or_none()
         if existing is None:
