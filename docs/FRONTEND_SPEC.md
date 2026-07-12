@@ -680,6 +680,8 @@ export const authApi = {
 };
 ```
 
+**Note on role change**: `authApi.updateUser(userId, { role })` handles role promotion/demotion. Admin cannot change their own role — enforce this client-side by disabling the dropdown when `userId === currentUser.id`.
+
 **NPM package required**: `@react-oauth/google` — Google's official React Sign-In button.
 
 ```bash
@@ -1197,12 +1199,14 @@ Use `createBrowserRouter` with the following route tree.
 | `/tradewatch/articles/:id` | `TradeWatchArticlePage` | Yes | |
 | `/tradewatch/analytics` | `TradeWatchAnalyticsPage` | Yes | |
 | `/tradewatch/knowledge-graph` | `TradeWatchKnowledgeGraphPage` | Yes | |
-| `/settings/users` | `UserManagementPage` | Yes | Admin only |
-| `/settings/org` | `OrgSettingsPage` | Yes | Admin only |
 | `/settings/notifications` | `NotificationPrefsPage` | Yes | Per-user notification preferences |
 | `/settings/interests` | `InterestsPage` | Yes | Manage interest profile |
 | `/settings/sources` | `SourcesPage` | Yes | Manage feed sources (all roles) + admin CRUD |
-| `/intel/jobs` | `IntelJobsPage` | Yes | Admin only — pipeline job history |
+| `/admin` | `AdminPanelPage` | Yes | Admin only — tabbed panel |
+| `/admin/users` | redirects to `/admin?tab=users` | Yes | Admin only |
+| `/admin/sources` | redirects to `/admin?tab=sources` | Yes | Admin only |
+| `/admin/jobs` | redirects to `/admin?tab=jobs` | Yes | Admin only |
+| `/admin/analytics` | redirects to `/admin?tab=analytics` | Yes | Admin only |
 
 **First-login detection**: after a successful `POST /auth/google` or `POST /auth/register-with-google`, check if the returned user has `onboarding_complete: false`. If so, redirect to `/onboarding` instead of `/`.
 
@@ -1226,9 +1230,8 @@ All authenticated pages render inside `AppShell`:
 | LayoutDashboard | Dashboard | `/` | All roles |
 | Briefcase | Workspace | `/workspace` | All roles — unified Email/Docs/Shipments |
 | Newspaper | TradeWatch | `/tradewatch` | All roles |
-| Users | Users | `/settings/users` | Admin only |
-| Settings | Org Settings | `/settings/org` | Admin only |
 | BarChart2 | Analytics | `/tradewatch/analytics` | All roles |
+| ShieldCheck | Admin | `/admin` | Admin only — users, sources, jobs, analytics |
 
 Active route highlights with a filled background. Sidebar shows the org name at the top.
 
@@ -1996,6 +1999,11 @@ export const queryKeys = {
   personalizedSummary: (articleId: string) => ['personalizedSummary', articleId],
   mySourcePreferences: ['mySourcePreferences'],
   knowledgeGraphStats: ['knowledgeGraphStats'],
+  // Admin panel
+  adminUsers: ['adminUsers'],
+  adminSources: ['adminSources'],
+  adminJobs: (filters?: object) => ['adminJobs', filters],
+  adminAnalytics: (days: number) => ['adminAnalytics', days],
 };
 ```
 
@@ -2008,6 +2016,7 @@ export const queryKeys = {
 - `intelFeed`: every 5 minutes (`refetchInterval: 300_000`) — new articles arrive hourly from sources
 - `intelAlerts`: no polling (manual refresh)
 - `flagSuggestions`: no polling (fetched once per dialog open)
+- `adminJobs`: every 30 seconds when the tab is open (`refetchInterval: 30_000`) — stop when no jobs have `status=running`
 - All others: default (no polling)
 
 ---
@@ -2105,6 +2114,7 @@ Implement in this order to deliver value incrementally:
 14. **TradeWatch Feed page** — feed, search, article detail
 15. **Shipment TradeWatch panel** (on Shipment Detail)
 16. **Sources & Notifications** (in settings/onboarding)
+17. **Admin Panel** (`/admin`) — Users tab first (role change), then Sources, Jobs, Analytics
 17. **Polish**: empty states, loading states, error handling, responsive layout
 
 ---
@@ -2134,7 +2144,10 @@ Implement in this order to deliver value incrementally:
 - **Country multi-select**: the country interest picker must allow selecting multiple countries in one action (multi-select dropdown or checkbox list), not require pressing + once per country.
 - **`hs_code` vs `hs_heading`**: "7208" is a 4-digit HS heading, NOT a country. If the user picks type=country and types "7208" the UI must reject it with a format error before the API is called.
 - **TradeWatch branding**: the feed section is called "TradeWatch" everywhere in the UI — not "Intel", not "Trade Intelligence", not "Intelligence Feed".
-- **Intel Jobs page** (`/intel/jobs`): admin-only, not shown in sidebar. It is an internal monitoring tool, not a user-facing feature.
+- **Admin panel** (`/admin`): guard with `user.role === 'admin'`. Redirect non-admins to `/` with a toast. Show the "Admin" sidebar item only to admins.
+- **Role self-change**: an admin must not be able to demote themselves. Disable the role dropdown for the row matching `currentUser.id` in the Users tab.
+- **Source deactivation** (admin): sets `is_active: false` — the source still appears in the list but stops being polled. This is a soft-delete, not a hard delete.
+- **Job reprocess**: only available for `status=failed` AND `job_type=enrich`. Show a "Reprocess" button on those rows only.
 - **Source preferences**: disabling a source hides its articles from the feed for the whole org. The admin source list (`/intel/sources`) still shows all sources; the preferences page is for feed curation only.
 - **Article feedback**: submitting feedback does not re-rank the feed. It is for product analytics only. Never show aggregate like/dislike counts to users.
 - **`auto_fix_threshold`**: stored as 0.0–1.0, display and accept as percentage (0–100). Clamp to 50–100% in the UI (backend enforces ge=0.5, le=1.0).
@@ -2142,6 +2155,153 @@ Implement in this order to deliver value incrementally:
 - **Sanctions flags** (`flag_type=mismatch`, `severity=critical`, title contains "Sanctions"): highlight with a distinct red banner on Shipment Detail. Never dismiss silently.
 - **Interest profile**: `is_explicit=false` interests are shown with a dimmed style and a tooltip "Auto-detected from your shipment history". They cannot be deleted — only explicit interests can be removed.
 - **Tabular files** (XLS/XLSX/CSV/XML): upload is supported (same upload UI). Show a spreadsheet icon (`Sheet`) instead of `FileText` for these content types.
+
+---
+
+## 16B. Admin Panel (`/admin`) — Admin only
+
+Single-page admin panel with **four tabs**. Non-admins are redirected to `/` with a toast "Access denied". Tab selection is persisted in the URL as `?tab=users|sources|jobs|analytics`.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Admin Panel                                                │
+│  [👥 Users]  [📡 Sources]  [⚙️ Jobs]  [📊 Analytics]       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 16B.1 Users Tab
+
+**Header**: "Users" + "Invite User" button
+
+**Table** (calls `GET /api/v1/auth/users`):
+
+| Column | Notes |
+|---|---|
+| Name / Email | `email` (no display name stored yet) |
+| Role | Dropdown in-row: `admin` / `manager` / `operator` — changing fires `PATCH /api/v1/auth/users/:id` with `{ role }` immediately → toast "Role updated" |
+| Status | Green "Active" / Gray "Inactive" badge |
+| Joined | `created_at` relative date |
+| Actions | Toggle active/inactive (eye icon) + revoke access (X icon, sets `is_active: false`) |
+
+**Role change** — inline dropdown per row, no modal needed:
+```
+│ john@example.com │ [admin    ▼] │ ● Active │ 3 days ago │ [👁] [✕] │
+│ jane@example.com │ [operator ▼] │ ● Active │ 1 week ago │ [👁] [✕] │
+```
+- Changing the dropdown immediately calls `PATCH /api/v1/auth/users/{id}` with `{ role: "admin"|"manager"|"operator" }`
+- Admin cannot demote themselves (disable the dropdown for the current user's own row)
+
+**Invite User dialog** (opens on "Invite User" button):
+```
+Email address  [jane@example.com        ]
+Role           [Operator ▼              ]
+               [Cancel]  [Send Invite →]
+```
+→ `POST /api/v1/auth/users` with `{ email, role }` → toast "User invited. They can sign in with Google using this email."
+
+---
+
+### 16B.2 Sources Tab
+
+**Header**: "News Sources" + "Add Source" button
+
+**Summary chips** (above table):
+```
+[✓ 12 Active]  [⚠ 2 Degraded]  [✕ 1 Dead]  [📰 847 articles / 24h]
+```
+Data from `GET /api/v1/intel/sources`.
+
+**Table**:
+
+| Column | Display |
+|---|---|
+| Name | Source name (bold) |
+| Type | `rss` / `scraper` / `sanctions_list` badge |
+| Category | tariff / sanctions / regulation / trade_news / market_notice coloured badge |
+| URL | truncated link (click → opens in new tab) |
+| Cadence | "Every {n} min" |
+| Last polled | relative date or "Never" |
+| Health | `healthy` (green) / `degraded` (amber) / `dead` (red) / `unknown` (gray) badge |
+| Articles | `articles_collected` count |
+| Active | toggle switch (`is_active`) |
+| Actions | ✏️ Edit  •  ▶ Poll now  •  🗑 Deactivate |
+
+**Add / Edit Source dialog**:
+```
+Name           [________________________]
+Type           [RSS ▼]
+Category       [Trade News ▼]
+URL            [https://...            ]
+Poll every     [60] minutes
+Priority       [5] (1–10)
+Active         [✓]
+               [Cancel]  [Save]
+```
+- Add → `POST /api/v1/intel/sources`
+- Edit → `PATCH /api/v1/intel/sources/:id`
+- Deactivate → confirm dialog → `DELETE /api/v1/intel/sources/:id` (soft-delete)
+- Poll now → `POST /api/v1/intel/sources/:id/poll` → toast "Poll queued for {name}"
+
+**Error tooltip**: hover red "dead"/"degraded" badge to see `last_error` text.
+
+---
+
+### 16B.3 Jobs Tab
+
+**Header**: "Pipeline Jobs"
+
+**Filter bar**:
+- Status chips: All / Pending / Running / Done / Failed (filter `?status=`)
+- Type chips: All / collect / parse / enrich / notify (filter `?job_type=`)
+- "Refresh" button (refetch every 30s automatically while any job is `running`)
+
+Calls `GET /api/v1/intel/jobs?limit=100&status=…&job_type=…`.
+
+**Table**:
+
+| Column | Display |
+|---|---|
+| Created | relative time (e.g. "2 min ago") |
+| Source | source name (link to Sources tab `?tab=sources`) |
+| Type | `collect` / `parse` / `enrich` / `notify` badge |
+| Status | `pending` (gray) / `running` (blue spinner) / `done` (green) / `failed` (red) badge |
+| Articles | `articles_processed` count |
+| Duration | `completed_at − started_at` — shown as "4.2s" or "1m 12s" |
+| Error | truncated `error_message` (click to expand full text in a tooltip/popover) |
+| Actions | **Reprocess** button — only on `status=failed` AND `job_type=enrich` rows → `POST /api/v1/intel/admin/reprocess/:article_id` |
+
+**Empty state**: "No jobs yet. Jobs are created when sources are polled."
+
+---
+
+### 16B.4 Analytics Tab
+
+**Date range selector**: 7 / 30 / 90 / 365 days (shared across all charts below).
+
+**Summary stats row** (top):
+```
+[📰 1,247 articles]  [⚡ Avg impact 3.2]  [🌍 42 countries]  [🔗 89 matched]
+```
+
+**Country Heatmap** (`GET /api/v1/intel/analytics/heatmap?days=N`):
+- Horizontal bar chart (country flag + ISO code + article count)
+- Ranked by count, max 20 bars
+- Clicking a country navigates to `/tradewatch?country=XX`
+
+**By Event Type** (`GET /api/v1/intel/analytics/by-event-type?days=N`):
+- Donut chart, coloured by `INTEL_EVENT_TYPE_COLORS`
+- Legend below with count labels
+
+**Impact Timeline** (`GET /api/v1/intel/analytics/impact-timeline?days=N`):
+- Line chart: x = date, y = `avg_impact_score` (1–5)
+- Secondary bars: `article_count` per day
+
+**Trending Topics** (`GET /api/v1/intel/analytics/trending?limit=20`):
+- Tag cloud or ranked table
+- Filter chips: hs_chapter / country / event_type / commodity
+- Each tag links to `/tradewatch?q={topic_value}`
 
 ---
 
