@@ -33,13 +33,15 @@ async def get_current_user(
 
 
 def require_role(*roles: UserRole):
+    """SUPER_ADMIN always passes regardless of the roles listed."""
     async def checker(current_user: User = Depends(get_current_user)) -> User:
-        if current_user.role not in roles:
+        if current_user.role != UserRole.SUPER_ADMIN and current_user.role not in roles:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
         return current_user
     return checker
 
 
+require_super_admin = require_role(UserRole.SUPER_ADMIN)
 require_admin = require_role(UserRole.ADMIN)
 require_manager = require_role(UserRole.ADMIN, UserRole.MANAGER)
 require_operator = require_role(UserRole.ADMIN, UserRole.MANAGER, UserRole.OPERATOR)

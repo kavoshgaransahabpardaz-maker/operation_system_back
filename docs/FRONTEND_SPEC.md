@@ -70,7 +70,7 @@ Define these in `src/types/index.ts`.
 ```typescript
 // ── Enums ──────────────────────────────────────────────────────────────────
 
-export type UserRole = 'admin' | 'manager' | 'operator';
+export type UserRole = 'super_admin' | 'admin' | 'manager' | 'operator';
 
 export type DocumentSource = 'email' | 'upload';
 
@@ -1202,11 +1202,17 @@ Use `createBrowserRouter` with the following route tree.
 | `/settings/notifications` | `NotificationPrefsPage` | Yes | Per-user notification preferences |
 | `/settings/interests` | `InterestsPage` | Yes | Manage interest profile |
 | `/settings/sources` | `SourcesPage` | Yes | Manage feed sources (all roles) + admin CRUD |
-| `/admin` | `AdminPanelPage` | Yes | Admin only — tabbed panel |
-| `/admin/users` | redirects to `/admin?tab=users` | Yes | Admin only |
-| `/admin/sources` | redirects to `/admin?tab=sources` | Yes | Admin only |
-| `/admin/jobs` | redirects to `/admin?tab=jobs` | Yes | Admin only |
-| `/admin/analytics` | redirects to `/admin?tab=analytics` | Yes | Admin only |
+| `/admin` | `AdminPanelPage` | Yes | Admin and Super Admin — org-scoped panel |
+| `/admin/users` | redirects to `/admin?tab=users` | Yes | Admin and Super Admin |
+| `/admin/sources` | redirects to `/admin?tab=sources` | Yes | Admin and Super Admin |
+| `/admin/jobs` | redirects to `/admin?tab=jobs` | Yes | Admin and Super Admin |
+| `/admin/analytics` | redirects to `/admin?tab=analytics` | Yes | Admin and Super Admin |
+| `/superadmin` | `SuperAdminPage` | Yes | Super Admin only — cross-org system panel |
+| `/superadmin/users` | redirects to `/superadmin?tab=users` | Yes | Super Admin only |
+| `/superadmin/orgs` | redirects to `/superadmin?tab=orgs` | Yes | Super Admin only |
+| `/superadmin/sources` | redirects to `/superadmin?tab=sources` | Yes | Super Admin only |
+| `/superadmin/jobs` | redirects to `/superadmin?tab=jobs` | Yes | Super Admin only |
+| `/superadmin/analytics` | redirects to `/superadmin?tab=analytics` | Yes | Super Admin only |
 
 **First-login detection**: after a successful `POST /auth/google` or `POST /auth/register-with-google`, check if the returned user has `onboarding_complete: false`. If so, redirect to `/onboarding` instead of `/`.
 
@@ -1231,7 +1237,8 @@ All authenticated pages render inside `AppShell`:
 | Briefcase | Workspace | `/workspace` | All roles — unified Email/Docs/Shipments |
 | Newspaper | TradeWatch | `/tradewatch` | All roles |
 | BarChart2 | Analytics | `/tradewatch/analytics` | All roles |
-| ShieldCheck | Admin | `/admin` | Admin only — users, sources, jobs, analytics |
+| ShieldCheck | Admin | `/admin` | Admin and Super Admin — org panel |
+| ShieldAlert | Super Admin | `/superadmin` | Super Admin only — cross-org system panel |
 
 Active route highlights with a filled background. Sidebar shows the org name at the top.
 
@@ -1831,7 +1838,7 @@ Calls `GET /api/v1/auth/users`.
 | Joined | Date |
 | Actions | Edit role dropdown + Deactivate/Activate toggle |
 
-**Role edit**: Inline `Select` per row (Admin, Manager, Operator). On change → `PATCH /api/v1/auth/users/:id` with `{ role }`.
+**Role edit**: Inline `Select` per row (Admin, Manager, Operator). Super Admin users see an additional "Super Admin" option. On change → `PATCH /api/v1/auth/users/:id` with `{ role }`.
 
 **Active toggle**: Switch per row. On toggle → `PATCH /api/v1/auth/users/:id` with `{ is_active }`.
 
@@ -2715,3 +2722,226 @@ Each source row:
 | Path | Component | Auth required | Notes |
 |---|---|---|---|
 | `/intel/sources/preferences` | `IntelSourcePreferencesPage` | Yes | All roles — manage org feed sources |
+
+---
+
+## 18. Super Admin Panel (`/superadmin`)
+
+Accessible only to users with `role === 'super_admin'`. Any other user who navigates here sees a "403 — Forbidden" page. Guard this route the same way as the admin panel but check `role === 'super_admin'` specifically.
+
+### Layout
+
+Same `AppShell` as all authenticated pages. The sidebar shows a **ShieldAlert** icon for "Super Admin" → `/superadmin` visible only to `super_admin` users.
+
+The page is a tabbed interface with four tabs: **Users · Organisations · Sources · Jobs · Analytics**.
+
+---
+
+### 18.1 Users Tab
+
+**API**: `GET /api/v1/admin/users` (query params: `is_active`, `role`, `org_id`)  
+**Query key**: `queryKeys.superAdminUsers(filters)`
+
+**Header**: "All Users" + count badge + search/filter bar
+
+**Filters** (above the table):
+- Search by email (client-side filter)
+- Role dropdown (super_admin / admin / manager / operator / all)
+- Org dropdown (populated from org list)
+- Active/Inactive toggle
+
+**Users table** columns:
+
+| Column | Notes |
+|---|---|
+| Email | |
+| Organisation | `org_name` (org_slug in sub-text) |
+| Role | Badge with colour: Super Admin (purple), Admin (blue), Manager (teal), Operator (gray) |
+| Status | Active / Inactive |
+| Joined | Date |
+| Actions | Role dropdown + Active toggle |
+
+**Role edit**: Inline `Select` with all four roles (Super Admin / Admin / Manager / Operator). On change → `PATCH /api/v1/admin/users/:id` with `{ role }`. Disable own row's role dropdown (cannot self-demote).
+
+**Active toggle**: `PATCH /api/v1/admin/users/:id` with `{ is_active: false }`. Show confirmation dialog before deactivating.
+
+**Response shape** (`UserOutWithOrg`):
+```typescript
+interface UserOutWithOrg {
+  id: string;
+  email: string;
+  org_id: string;
+  org_name: string;
+  org_slug: string;
+  role: UserRole;
+  is_active: boolean;
+  created_at: string;
+}
+```
+
+---
+
+### 18.2 Organisations Tab
+
+**API**: `GET /api/v1/admin/organizations`  
+**Query key**: `queryKeys.superAdminOrgs`
+
+**Header**: "All Organisations" + "Create Organisation" button
+
+**Table** columns:
+
+| Column | Notes |
+|---|---|
+| Name | |
+| Slug | Monospace |
+| Users | `user_count` |
+| Created | Date |
+| Actions | Edit name/slug button |
+
+**Create Organisation Dialog**:  
+Fields: name, slug (auto-slugify from name, editable).  
+Submit → `POST /api/v1/admin/organizations` with `{ name, slug }`.
+
+**Edit Organisation Dialog**:  
+Pre-filled fields: name, slug.  
+Submit → `PATCH /api/v1/admin/organizations/:id` with `{ name?, slug? }`.
+
+**Response shape** (`OrgOutWithStats`):
+```typescript
+interface OrgOutWithStats {
+  id: string;
+  name: string;
+  slug: string;
+  created_at: string;
+  user_count: number;
+}
+```
+
+---
+
+### 18.3 Sources Tab
+
+Same as the existing admin Sources tab but uses the super-admin endpoints which are not org-scoped:
+
+- `GET /api/v1/admin/sources` — list all sources
+- `POST /api/v1/admin/sources` — create source
+- `PATCH /api/v1/admin/sources/:id` — update source
+- `DELETE /api/v1/admin/sources/:id` — deactivate source (soft-delete, sets `is_active: false`)
+
+**Table** columns: Name, URL, Category, Type, Priority, Status (Active/Inactive), Last Polled, Articles, Actions.
+
+**Create Source Dialog**: name, url, category, source_type, poll_cadence_minutes (default 60), priority (1–10, default 5).
+
+**Edit Source Dialog**: same fields, pre-filled.
+
+**Deactivate button**: shows confirmation: "This source will stop being polled. Existing articles are kept."
+
+---
+
+### 18.4 Jobs Tab
+
+**API**: `GET /api/v1/admin/jobs?limit=100&status=&source_id=`  
+**Query key**: `queryKeys.superAdminJobs(filters)`  
+**Poll interval**: 30 seconds (active jobs change status)
+
+**Filters**: status (all / running / completed / failed), source dropdown.
+
+**Table** columns: Job Type, Source, Status, Articles Processed, Started, Completed, Error (truncated, tooltip for full text).
+
+**Colour-coded status**: running (blue), completed (green), failed (red).
+
+---
+
+### 18.5 Analytics Tab
+
+**API**: `GET /api/v1/admin/analytics`  
+**Query key**: `queryKeys.superAdminAnalytics`  
+**Cache**: 5 minutes (stale-while-revalidate)
+
+**Layout** — stat cards in a 3-column grid:
+
+```
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│ Organisations│  │ Total Users  │  │ Active Users │
+│     12       │  │    87        │  │    74        │
+└──────────────┘  └──────────────┘  └──────────────┘
+
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│ Sources      │  │ Active Sources│  │ Articles     │
+│     24       │  │    20        │  │   14,882     │
+└──────────────┘  └──────────────┘  └──────────────┘
+
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│ Enriched     │  │ Total Jobs   │  │ Failed Jobs  │
+│   13,200     │  │   1,440      │  │      8       │
+└──────────────┘  └──────────────┘  └──────────────┘
+```
+
+Below the grid: a **Users by Role** horizontal bar chart (`by_role` breakdown from the API).
+
+---
+
+### 18.6 API functions (`src/api/admin.ts`)
+
+```typescript
+export const adminApi = {
+  // Users
+  listUsers: (filters?: { is_active?: boolean; role?: UserRole; org_id?: string }) =>
+    api.get('/admin/users', { params: filters }).then(r => r.data as UserOutWithOrg[]),
+  updateUser: (userId: string, data: { role?: UserRole; is_active?: boolean }) =>
+    api.patch(`/admin/users/${userId}`, data).then(r => r.data as UserOutWithOrg),
+  deactivateUser: (userId: string) =>
+    api.delete(`/admin/users/${userId}`),
+
+  // Organisations
+  listOrgs: () =>
+    api.get('/admin/organizations').then(r => r.data as OrgOutWithStats[]),
+  createOrg: (data: { name: string; slug: string }) =>
+    api.post('/admin/organizations', data).then(r => r.data as OrgOut),
+  updateOrg: (orgId: string, data: { name?: string; slug?: string }) =>
+    api.patch(`/admin/organizations/${orgId}`, data).then(r => r.data as OrgOut),
+
+  // Sources
+  listSources: () =>
+    api.get('/admin/sources').then(r => r.data as IntelSourceOut[]),
+  createSource: (data: IntelSourceCreate) =>
+    api.post('/admin/sources', data).then(r => r.data as IntelSourceOut),
+  updateSource: (sourceId: string, data: Partial<IntelSourceCreate>) =>
+    api.patch(`/admin/sources/${sourceId}`, data).then(r => r.data as IntelSourceOut),
+  deleteSource: (sourceId: string) =>
+    api.delete(`/admin/sources/${sourceId}`),
+
+  // Jobs
+  listJobs: (filters?: { status?: string; source_id?: string; limit?: number }) =>
+    api.get('/admin/jobs', { params: filters }).then(r => r.data as IntelJobOut[]),
+
+  // Analytics
+  analytics: () =>
+    api.get('/admin/analytics').then(r => r.data),
+};
+```
+
+---
+
+### 18.7 Query keys
+
+Add to `queryKeys` in `src/api/queryKeys.ts`:
+
+```typescript
+superAdminUsers: (filters?: object) => ['superAdminUsers', filters],
+superAdminOrgs: ['superAdminOrgs'],
+superAdminSources: ['superAdminSources'],
+superAdminJobs: (filters?: object) => ['superAdminJobs', filters],
+superAdminAnalytics: ['superAdminAnalytics'],
+```
+
+---
+
+### 18.8 Business rules
+
+- Only `super_admin` users can access `/superadmin/*`. Guard client-side and trust the 403 from the server.
+- A super admin cannot demote themselves (the API enforces this; disable own role dropdown client-side too).
+- A super admin cannot deactivate themselves (disable own active toggle).
+- Role badge colours: `super_admin` = purple (`bg-purple-100 text-purple-800`), `admin` = blue, `manager` = teal, `operator` = gray.
+- Deactivating a user is a soft delete (`is_active: false`). No hard deletes from the UI.
+- All super-admin mutations invalidate the relevant super-admin query key on success.

@@ -75,3 +75,19 @@ class PasswordResetConfirm(BaseModel):
 class UserUpdate(BaseModel):
     role: UserRole | None = None
     is_active: bool | None = None
+
+
+class OrgUpdate(BaseModel):
+    name: str | None = None
+    slug: str | None = None
+
+
+class OrgOutWithStats(OrgOut):
+    """Extended org view for super-admin with user count."""
+    user_count: int
+
+
+class UserOutWithOrg(UserOut):
+    """Extended user view for super-admin with org name and slug."""
+    org_name: str
+    org_slug: str
