@@ -298,7 +298,7 @@ async def system_analytics(
     role_rows = (await db.execute(
         select(User.role, func.count(User.id)).group_by(User.role)
     )).all()
-    role_breakdown = {str(r): c for r, c in role_rows}
+    role_breakdown = {r.value if hasattr(r, 'value') else str(r): c for r, c in role_rows}
 
     return {
         "organizations": {"total": org_count},
