@@ -377,6 +377,84 @@ async def list_interest_types(current_user: User = Depends(get_current_user)):
 
 
 # ---------------------------------------------------------------------------
+# HS code autocomplete — returns distinct HS codes from extracted fields
+# ---------------------------------------------------------------------------
+
+@router.get("/intel/hs-codes/autocomplete")
+async def hs_autocomplete(
+    q: str = Query(..., min_length=2, description="HS code prefix (at least 2 digits)"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Return distinct HS codes from the org's extracted fields that start with the given prefix."""
+    import re
+    from app.modules.field_extraction.models import ExtractedField
+
+    if not re.fullmatch(r"\d+", q):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="q must be digits only")
+
+    result = await db.execute(
+        select(ExtractedField.value_normalized)
+        .where(
+            ExtractedField.org_id == current_user.org_id,
+            ExtractedField.field_name == "hs_code",
+            ExtractedField.value_normalized.ilike(f"{q}%"),
+        )
+        .distinct()
+        .limit(20)
+    )
+    codes = [row[0] for row in result.all() if row[0]]
+    return {"results": sorted(codes)}
+
+
+# ---------------------------------------------------------------------------
+# Product description → HS codes (uses OpenAI)
+# ---------------------------------------------------------------------------
+
+from pydantic import BaseModel as _PydanticBase
+
+
+class _ProductToHsRequest(_PydanticBase):
+    description: str
+
+
+@router.post("/intel/interests/from-description")
+async def interests_from_description(
+    data: _ProductToHsRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Convert a plain-language product description into suggested HS codes."""
+    from openai import AsyncOpenAI
+    from app.core.config import settings
+
+    if not data.description.strip():
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="description is required")
+
+    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    prompt = (
+        "You are an HS code expert. Given this product description, suggest the most likely "
+        "HS heading codes (4-digit) and HS chapter codes (2-digit).\n\n"
+        f"Product: {data.description.strip()}\n\n"
+        "Respond ONLY with JSON in this exact format:\n"
+        '{"hs_headings": ["7208", "7209"], "hs_chapters": ["72"], "rationale": "one sentence"}'
+    )
+    response = await client.chat.completions.create(
+        model=settings.OPENAI_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
+    import json
+    raw = json.loads(response.choices[0].message.content)
+    return {
+        "hs_headings": raw.get("hs_headings", []),
+        "hs_chapters": raw.get("hs_chapters", []),
+        "rationale": raw.get("rationale", ""),
+        "description": data.description.strip(),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Sources (admin only)
 # ---------------------------------------------------------------------------
 

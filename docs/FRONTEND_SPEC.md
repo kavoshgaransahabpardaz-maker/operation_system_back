@@ -951,6 +951,19 @@ export const intelApi = {
   listInterestTypes: () =>
     apiClient.get<InterestTypeOption[]>('/api/v1/intel/interest-types'),
 
+  // HS code autocomplete — returns distinct codes from org's extracted fields
+  hsAutocomplete: (q: string) =>
+    apiClient.get<{ results: string[] }>('/api/v1/intel/hs-codes/autocomplete', { params: { q } }),
+
+  // Product description → HS code suggestions
+  hsFromDescription: (description: string) =>
+    apiClient.post<{
+      hs_headings: string[];
+      hs_chapters: string[];
+      rationale: string;
+      description: string;
+    }>('/api/v1/intel/interests/from-description', { description }),
+
   // Knowledge graph stats
   knowledgeGraphStats: () =>
     apiClient.get<{ total_relations: number; by_predicate: Record<string, number>; by_subject_type: Record<string, number> }>(
@@ -1174,24 +1187,24 @@ Use `createBrowserRouter` with the following route tree.
 |---|---|---|---|
 | `/login` | `LoginPage` | No | Google Sign-In. Redirect to `/` if already logged in |
 | `/register` | `RegisterPage` | No | Google Sign-In + org name/slug form |
+| `/onboarding` | `OnboardingPage` | Yes | First-time setup wizard — redirect here after first login |
 | `/` | `DashboardPage` | Yes | Default route |
-| `/documents` | `DocumentListPage` | Yes | |
-| `/documents/:id` | `DocumentDetailPage` | Yes | |
-| `/shipments` | `ShipmentListPage` | Yes | |
-| `/shipments/:id` | `ShipmentDetailPage` | Yes | |
-| `/email` | `EmailConnectionsPage` | Yes | |
+| `/workspace` | `WorkspacePage` | Yes | Unified Email + Documents + Shipments tab view |
+| `/workspace/documents/:id` | `DocumentDetailPage` | Yes | Opens from workspace documents tab |
+| `/workspace/shipments/:id` | `ShipmentDetailPage` | Yes | Opens from workspace shipments tab |
+| `/tradewatch` | `TradeWatchFeedPage` | Yes | TradeWatch intelligence feed |
+| `/tradewatch/search` | `TradeWatchSearchPage` | Yes | |
+| `/tradewatch/articles/:id` | `TradeWatchArticlePage` | Yes | |
+| `/tradewatch/analytics` | `TradeWatchAnalyticsPage` | Yes | |
+| `/tradewatch/knowledge-graph` | `TradeWatchKnowledgeGraphPage` | Yes | |
 | `/settings/users` | `UserManagementPage` | Yes | Admin only |
 | `/settings/org` | `OrgSettingsPage` | Yes | Admin only |
-| `/intel` | `IntelFeedPage` | Yes | NEW — trade intelligence feed |
-| `/intel/search` | `IntelSearchPage` | Yes | NEW |
-| `/intel/articles/:id` | `IntelArticlePage` | Yes | NEW |
-| `/intel/alerts` | `IntelAlertsPage` | Yes | NEW |
-| `/intel/interests` | `IntelInterestsPage` | Yes | NEW — manage interest profile |
-| `/intel/analytics` | `IntelAnalyticsPage` | Yes | NEW — trending, heatmap, impact timeline |
-| `/intel/knowledge-graph` | `IntelKnowledgeGraphPage` | Yes | NEW — explore entity relationships |
-| `/intel/notifications` | `IntelNotificationsPage` | Yes | NEW — notification preferences |
-| `/intel/sources` | `IntelSourcesPage` | Yes | Admin only — NEW |
-| `/intel/jobs` | `IntelJobsPage` | Yes | Admin only — NEW — pipeline job history |
+| `/settings/notifications` | `NotificationPrefsPage` | Yes | Per-user notification preferences |
+| `/settings/interests` | `InterestsPage` | Yes | Manage interest profile |
+| `/settings/sources` | `SourcesPage` | Yes | Manage feed sources (all roles) + admin CRUD |
+| `/intel/jobs` | `IntelJobsPage` | Yes | Admin only — pipeline job history |
+
+**First-login detection**: after a successful `POST /auth/google` or `POST /auth/register-with-google`, check if the returned user has `onboarding_complete: false`. If so, redirect to `/onboarding` instead of `/`.
 
 Wrap all authenticated routes in an `AuthGuard` component that reads `localStorage.access_token` and redirects to `/login` if missing.
 
@@ -1203,22 +1216,41 @@ Wrap all authenticated routes in an `AuthGuard` component that reads `localStora
 
 All authenticated pages render inside `AppShell`:
 - Fixed left `Sidebar` (240px wide)
-- Top `TopBar` (user info + logout)
 - Scrollable `main` content area
+- No top bar — user controls live in the sidebar bottom
 
 ### Sidebar navigation items
 
 | Icon | Label | Route | Visible to |
 |---|---|---|---|
 | LayoutDashboard | Dashboard | `/` | All roles |
-| Files | Documents | `/documents` | All roles |
-| Ship | Shipments | `/shipments` | All roles |
-| Mail | Email | `/email` | All roles |
+| Briefcase | Workspace | `/workspace` | All roles — unified Email/Docs/Shipments |
+| Newspaper | TradeWatch | `/tradewatch` | All roles |
 | Users | Users | `/settings/users` | Admin only |
 | Settings | Org Settings | `/settings/org` | Admin only |
-| Newspaper | Trade Intel | `/intel` | All roles — NEW |
+| BarChart2 | Analytics | `/tradewatch/analytics` | All roles |
 
-Active route highlights with a filled background. Sidebar shows the org name at the top and a small user-role badge at the bottom.
+Active route highlights with a filled background. Sidebar shows the org name at the top.
+
+**Profile menu (bottom-left of sidebar)**:
+
+A circular avatar button at the very bottom of the sidebar shows the user's first initial. Clicking it opens a popover with:
+
+```
+┌─────────────────────────────┐
+│  ● John Smith               │
+│    john@example.com         │
+│    Admin                    │
+├─────────────────────────────┤
+│  🔔 Notification Preferences│  → /settings/notifications
+│  ❤️  My Interests            │  → /settings/interests
+│  📰 News Sources            │  → /settings/sources
+├─────────────────────────────┤
+│  🚪 Sign out                │
+└─────────────────────────────┘
+```
+
+All settings items that were previously scattered as separate sidebar entries are consolidated here.
 
 ---
 
@@ -1242,8 +1274,9 @@ Active route highlights with a filled background. Sidebar shows the org name at 
 **Flow**:
 1. Render `<GoogleLogin>` from `@react-oauth/google`
 2. On success → `googleLogin(response.credential)` → `POST /api/v1/auth/google`
-3. Store `access_token` in `localStorage` → navigate to `/`
-4. On API 401 ("No account found…"): show error banner: *"No BrokerAI account linked to this Google address. Ask your admin to invite you."*
+3. Store `access_token` in `localStorage`
+4. Check if user is first-time (`onboarding_complete: false`) → navigate to `/onboarding`, otherwise → `/`
+5. On API 401 ("No account found…"): show error banner: *"No BrokerAI account linked to this Google address. Ask your admin to invite you."*
 
 **Redirect**: if `localStorage.access_token` already exists on page load, redirect to `/` immediately.
 
@@ -1317,8 +1350,155 @@ Source: `recent_email_imports` from `DashboardStats`.
 
 Buttons:
 - "Upload Document" → opens upload dialog (same as document list page upload)
-- "View Documents" → navigates to `/documents`
-- "Manage Email" → navigates to `/email`
+- "View Workspace" → navigates to `/workspace`
+
+---
+
+### 8.NEW Onboarding Wizard (`/onboarding`)
+
+Shown only on first login (`onboarding_complete: false`). A multi-step full-screen wizard. After the final step, call `PATCH /api/v1/workspace/settings` with `{ onboarding_complete: true }` and redirect to `/`.
+
+**Step indicator** at the top: 4 numbered circles connected by a line.
+
+---
+
+**Step 1 — Org Settings**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Step 1 of 4 · Organisation Settings                        │
+│                                                             │
+│  Company name     [________________________]                 │
+│  Industry sector  [________________________]                 │
+│  Primary country  [________________________]                 │
+│                                                             │
+│  Tolerance thresholds (invoice value mismatch)              │
+│  ○ Strict (0%)  ● Moderate (5%)  ○ Relaxed (10%)           │
+│                                                             │
+│  Document organisation                                      │
+│  ○ By shipment  ● By date  ○ By document type              │
+│                                                             │
+│                               [Skip]  [Next →]             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Call `GET /api/v1/workspace/settings` to pre-fill. On Next → `PATCH /api/v1/workspace/settings`.
+
+---
+
+**Step 2 — My Interests**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Step 2 of 4 · What do you trade?                           │
+│                                                             │
+│  Describe a product to get HS code suggestions:            │
+│  [stainless steel flat-rolled products     ] [Suggest →]   │
+│                                                             │
+│  Suggested:  [HS 7219 ✓]  [HS 7220 ✓]  [Chapter 72 ✓]    │
+│  (Rationale: flat-rolled stainless steel)                   │
+│                                                             │
+│  Countries  [GB ×] [ES ×]  [+ Select countries ▼]         │
+│  (multi-select dropdown, shows flag + name)                 │
+│                                                             │
+│  Party names  [CHEFFINS ×]  [+ Add]                        │
+│  Industries   [Agriculture ×]  [+ Add]                     │
+│                                                             │
+│  HS Codes — type 2+ digits for autocomplete:               │
+│  [87____]  suggestions appear as you type                   │
+│                                                             │
+│                          [← Back]  [Skip]  [Next →]        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+- **Product description → HS**: `POST /api/v1/intel/interests/from-description` → show returned `hs_headings` and `hs_chapters` as checkboxes; checked items are added via `POST /api/v1/intel/interests` on Next.
+- **Country multi-select**: a searchable dropdown (or `<select multiple>`) listing all ISO countries; selections shown as chips with flag + code. Do NOT require pressing + per country.
+- **HS autocomplete**: on typing 2+ digits, call `GET /api/v1/intel/hs-codes/autocomplete?q={prefix}` and show results as a dropdown.
+- Party name / Industry: text-only inputs; reject if value contains digits (show inline error).
+
+---
+
+**Step 3 — News Sources**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Step 3 of 4 · Choose your news sources                     │
+│                                                             │
+│  TARIFF                                                     │
+│  ✓ GOV.UK Trade Tariffs                                    │
+│  ✓ HMRC Notices                                            │
+│                                                             │
+│  SANCTIONS                                                  │
+│  ✓ UK Sanctions (OFSI)                                     │
+│  ✓ EU Sanctions                                            │
+│                                                             │
+│  TRADE NEWS                                                 │
+│  ✓ BIFA News                                               │
+│  □ WCO Committee                                           │
+│                                                             │
+│                          [← Back]  [Skip]  [Next →]        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Load sources from `GET /api/v1/intel/sources/my-preferences`. Toggle each with `PATCH /api/v1/intel/sources/{id}/preference`.
+
+---
+
+**Step 4 — Notification Preferences**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Step 4 of 4 · How do you want to be alerted?               │
+│                                                             │
+│  Email me when impact is ≥ ____                            │
+│  [● 1-Low  ○ 2-Minor  ● 3-Moderate  ○ 4-High  ○ 5-Critical]│
+│                                                             │
+│  Impact score guide:                                        │
+│  1 · Low      — Background context, no urgent action       │
+│  2 · Minor    — Worth monitoring, low trade impact         │
+│  3 · Moderate — May affect costs or compliance             │
+│  4 · High     — Likely affects your shipments directly     │
+│  5 · Critical — Immediate action required (sanctions etc.) │
+│                                                             │
+│  Event types to receive alerts for:                        │
+│  ☑ Tariff changes   ☑ Sanctions   ☑ Regulations          │
+│  ☑ Trade agreements  □ General trade news                  │
+│                                                             │
+│  ✉ Email alerts  [toggle on]                              │
+│                                                             │
+│                          [← Back]  [Finish ✓]              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Save → `PATCH /api/v1/intel/notifications/preferences` + mark onboarding complete.
+
+---
+
+### 8.NEW Workspace Page (`/workspace`)
+
+**Unified view** for Email, Documents, and Shipments — three tabs in one page.
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Workspace                              [Upload Document ↑]  │
+│  [📧 Email]  [📄 Documents]  [🚢 Shipments]                  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Email tab** — same content as current `/email` page (EmailConnectionsPage). Calls `GET /api/v1/emails/connections` and `GET /api/v1/emails/imports`.
+
+**Documents tab** — same content as current `/documents` list (DocumentListPage):
+- Upload zone + document table with status, type, shipment association
+- Click document row → opens `/workspace/documents/:id` (full DocumentDetailPage)
+- Includes filter by status, type, shipment
+
+**Shipments tab** — same content as current `/shipments` list (ShipmentListPage):
+- Shipment table with reference, status, document count, flag count
+- Click row → opens `/workspace/shipments/:id` (full ShipmentDetailPage)
+
+**URL persistence**: use `?tab=email|documents|shipments` query param so the browser back button restores the tab.
+
+**Cross-tab links**: from a shipment, "View documents" opens the Documents tab filtered by `shipment_id`. From a document, "Open shipment" navigates to the Shipments tab for that shipment.
 
 ---
 
@@ -1922,9 +2102,9 @@ Implement in this order to deliver value incrementally:
 11. **Email Connections page**
 12. **User Management page** (admin only)
 13. **Org Settings page** (admin only)
-14. **Trade Intel Feed page** — feed, search, article detail
-15. **Intel Alerts page** + shipment intel panel (on Shipment Detail)
-16. **Intel Sources admin page**
+14. **TradeWatch Feed page** — feed, search, article detail
+15. **Shipment TradeWatch panel** (on Shipment Detail)
+16. **Sources & Notifications** (in settings/onboarding)
 17. **Polish**: empty states, loading states, error handling, responsive layout
 
 ---
@@ -1950,8 +2130,11 @@ Implement in this order to deliver value incrementally:
 - `name_match_threshold` is stored as 0.0–1.0. Always display as a percentage (multiply by 100) in the UI.
 - **Suggestions are never auto-applied**: only show them as pre-fill options in the resolve dialog. The user must explicitly click and submit.
 - **Intel HS codes**: only displayed when `hs_chapters` / `hs_headings` arrays are non-empty. Never infer HS codes from article text in the UI.
-- **Interest validation**: validate client-side before submitting. Country must be 2-letter uppercase ISO alpha-2 (e.g. "GB"). HS chapter = 2 digits, HS heading = 4 digits, HS code = 6–10 digits. Show inline error from `INTEREST_TYPE_FORMAT_HINTS`; on 422 from API, show `detail` message.
+- **Interest validation**: validate client-side before submitting. Country must be 2-letter uppercase ISO alpha-2 (e.g. "GB"). HS chapter = 2 digits, HS heading = 4 digits, HS code = 6–10 digits. **Party name and Industry must contain only letters/spaces/hyphens — no digits.** Show inline error; on 422 from API, show `detail` message.
+- **Country multi-select**: the country interest picker must allow selecting multiple countries in one action (multi-select dropdown or checkbox list), not require pressing + once per country.
 - **`hs_code` vs `hs_heading`**: "7208" is a 4-digit HS heading, NOT a country. If the user picks type=country and types "7208" the UI must reject it with a format error before the API is called.
+- **TradeWatch branding**: the feed section is called "TradeWatch" everywhere in the UI — not "Intel", not "Trade Intelligence", not "Intelligence Feed".
+- **Intel Jobs page** (`/intel/jobs`): admin-only, not shown in sidebar. It is an internal monitoring tool, not a user-facing feature.
 - **Source preferences**: disabling a source hides its articles from the feed for the whole org. The admin source list (`/intel/sources`) still shows all sources; the preferences page is for feed curation only.
 - **Article feedback**: submitting feedback does not re-rank the feed. It is for product analytics only. Never show aggregate like/dislike counts to users.
 - **`auto_fix_threshold`**: stored as 0.0–1.0, display and accept as percentage (0–100). Clamp to 50–100% in the UI (backend enforces ge=0.5, le=1.0).
@@ -1962,13 +2145,13 @@ Implement in this order to deliver value incrementally:
 
 ---
 
-## 17. Trade Intelligence Pages — NEW
+## 17. TradeWatch Pages
 
-### 17.1 Intel Feed Page (`/intel`)
+### 17.1 TradeWatch Feed Page (`/tradewatch`)
 
 Calls `GET /api/v1/intel/feed` with `refetchInterval: 300_000`.
 
-**Header**: "Trade Intelligence" title + search input (navigates to `/intel/search?q=...`) + "My Interests" button (opens interests panel)
+**Header**: "TradeWatch" title (not "Intel" or "Trade Intelligence") + search input (navigates to `/tradewatch/search?q=...`)
 
 **Filter bar**: load options from `GET /api/v1/intel/filter-options` (`queryKeys.intelFilterOptions`).
 
@@ -2077,26 +2260,54 @@ Calls `GET /api/v1/intel/alerts`.
 
 ---
 
-### 17.5 Intel Sources Page (`/intel/sources`) — Admin only
+### 17.5 Sources Page (`/settings/sources`) — All roles (admin sees more)
 
-Non-admins see a 403 message.
+Merges the old "Intel Sources" (admin) and "Source Preferences" (all roles) into a single page. Accessible from the profile menu.
 
-Calls `GET /api/v1/intel/sources`.
+**All roles** see:
 
-**Header**: "Intelligence Sources" title
+**Header**: "News Sources — Choose which sources appear in your feed"
 
-**Sources table**:
+Sources are grouped by category (Tariff / Sanctions / Regulation / Trade News). Each row:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  ● GOV.UK Trade Tariffs   [tariff]   healthy   [enabled  ▼] │
+│  ● UK Sanctions (OFSI)    [sanction] healthy   [enabled  ▼] │
+│  ○ WCO Committee          [trade]    unknown   [disabled ▼] │
+└──────────────────────────────────────────────────────────────┘
+```
+
+- Toggle (`is_enabled`) → `PATCH /api/v1/intel/sources/{id}/preference` → invalidate feed + preferences
+- Disabled sources are dimmed
+- Data: `GET /api/v1/intel/sources/my-preferences`
+
+**Admin-only section** (shown below, or in a separate "Admin" tab):
+
+Full CRUD table with extended columns:
 | Column | Notes |
 |---|---|
 | Name | Source name |
 | Type | `rss` / `scraper` / `sanctions_list` badge |
+| Category | tariff / sanctions / regulation / trade_news |
 | URL | Truncated, external link |
 | Cadence | "Every {n} min" |
 | Last polled | Relative date or "Never" |
-| Status | Green dot (active) / gray dot (inactive) + red "Error" badge if `last_error` non-null |
-| Actions | "Poll now" button → `POST /api/v1/intel/sources/:id/poll` → toast "Poll queued" |
+| Health | healthy / degraded / dead / unknown badge |
+| Articles | `articles_collected` count |
+| Status | Active / Inactive dot |
+| Actions | Poll now + Edit + Deactivate |
+
+**Add Source** (admin) → `AddSourceDialog` → `POST /api/v1/intel/sources`
+**Edit** → pre-filled dialog → `PATCH /api/v1/intel/sources/:id`
+**Deactivate** → confirm → `DELETE /api/v1/intel/sources/:id`
+**Poll now** → `POST /api/v1/intel/sources/:id/poll` → toast "Poll queued"
 
 **Error tooltip**: hover the red "Error" badge to see `last_error` text.
+
+**Source Health summary** (admin only, above the table):
+- Total active sources / Healthy count / Degraded / Dead
+- Articles ingested last 24h
 
 ---
 
@@ -2114,44 +2325,42 @@ If no articles: info box "No trade events matched to this shipment yet. The syst
 
 ---
 
-### 17.7 Interests Management (side panel or inline on Feed page)
+### 17.7 Interests Management (`/settings/interests`)
 
-Opened by "My Interests" button on the Intel Feed page.
+Also accessible as Step 2 of the onboarding wizard. Calls `GET /api/v1/intel/interests`.
 
-Calls `GET /api/v1/intel/interests`.
-
-**Layout**: grouped by `interest_type`.
+**Layout**: grouped by `interest_type` in a full-page card.
 
 ```
-HS Chapters       HS Headings       Countries        Party Names
-[72] [73] [+]    [7208] [7209] [+]  [🇬🇧 GB] [🇹🇷 TR] [+]   [+]
+HS Chapters       HS Headings       Countries              Party Names    Industries
+[72 ×] [73 ×]    [7208 ×] [+]      [🇬🇧 GB ×] [🇪🇸 ES ×]   [Cheffins ×]   [Agriculture ×]
+[+ Add chapter]   [+ Add heading]   [+ Select countries]   [+ Add name]   [+ Add industry]
 ```
 
-- Each `InterestChip` with delete × button (only for `is_explicit=true`)
-- Auto-seeded interests (dimmed): tooltip "Auto-detected from your shipments"
-- "+" button per group → opens `AddInterestDialog`
+- Each `InterestChip` has delete × (only for `is_explicit=true`)
+- Auto-seeded interests (dimmed) show tooltip "Auto-detected from your shipments"
 
-**Add Interest Dialog**:
-- Load types from `GET /api/v1/intel/interest-types` (or use `INTEREST_TYPE_LABELS` / `INTEREST_TYPE_FORMAT_HINTS` from constants if pre-loaded)
-- `interest_type` select: HS Chapter / HS Heading / HS Code / Country / Party Name / Industry
-- `value` text input with format hint below from `InterestTypeOption.format_hint`
-- Client-side validation before submitting:
-  - **country** — must match `[A-Z]{2}` (uppercased). Show error: "Use a 2-letter ISO code, e.g. GB"
-  - **hs_chapter** — must be exactly 2 digits
-  - **hs_heading** — must be exactly 4 digits
-  - **hs_code** — must be 6–10 digits
-  - **party_name / industry** — free text, non-empty
-- Submit → `POST /api/v1/intel/interests`
-- On 422: show the `detail` error message below the value input
-- On success: invalidate interests query, toast "Interest added"
+**Adding HS codes — with autocomplete**:
+- Text input; on typing 2+ digits call `GET /api/v1/intel/hs-codes/autocomplete?q={prefix}` (debounce 300ms)
+- Show results as a dropdown below the input; user selects one → chip added
+- Validation: chapter = 2 digits, heading = 4 digits, code = 6–10 digits
 
-**Delete**: clicking × on an explicit interest → `DELETE /api/v1/intel/interests/:id` → toast "Interest removed"
+**Adding countries — multi-select**:
+- Clicking "+ Select countries" opens a searchable dropdown/popover listing all ISO countries (name + flag + code)
+- User can **select multiple** in one action; confirm → all selected countries added via `POST /api/v1/intel/interests` in a batch (one request per country, in parallel)
+- Never require pressing + once per country
 
-**Interest types displayed** (update layout to include new types):
-```
-HS Chapters   HS Headings   HS Codes    Countries    Party Names    Industries
-[72] [+]      [7208] [+]    [720851][+] [🇬🇧 GB] [+]  [Acme Ltd] [+]  [Steel] [+]
-```
+**Adding party name / industry**:
+- Text input; client-side reject if value contains any digit (show: "Must contain letters only — no numbers")
+- API will also return 422 if validation fails; show `detail` message
+
+**Product description → HS codes**:
+- "Describe your product" text area at the top of the HS section
+- On submit → `POST /api/v1/intel/interests/from-description` with `{ description }`
+- Response shows `hs_headings` + `hs_chapters` as checkboxes with the rationale sentence
+- User checks the ones to add, clicks "Add selected" → batch `POST /api/v1/intel/interests`
+
+**Delete**: clicking × → `DELETE /api/v1/intel/interests/:id` → invalidate interests query
 
 ---
 
@@ -2197,17 +2406,27 @@ An interactive node-link graph (use `react-force-graph` or similar; fallback to 
 
 ---
 
-### 17.10 Notification Preferences Page (`/intel/notifications`)
+### 17.10 Notification Preferences (`/settings/notifications`)
 
-Calls `GET /api/v1/intel/notifications/preferences` on load.
+Also shown as Step 4 of the onboarding wizard. Calls `GET /api/v1/intel/notifications/preferences` on load.
+
+**Impact score guide** — always displayed on this page (not just in tooltips):
+
+| Score | Level | Meaning |
+|---|---|---|
+| 1 | Low | Background context, no urgent action needed |
+| 2 | Minor | Worth monitoring; low near-term trade impact |
+| 3 | Moderate | May affect costs, compliance, or timelines |
+| 4 | High | Likely affects your shipments directly — plan ahead |
+| 5 | Critical | Immediate action required (e.g. sanctions, port closures) |
 
 **Form**:
-- **Min Impact Score** — slider 1–5 with label e.g. "Notify me for impact ≥ 3". Show the impact level description from `filter_options.impact_scale` as a subtitle.
-- **Event Types** — multi-select checkboxes (all event types from `INTEL_EVENT_TYPE_LABELS`); empty = all event types
-- **Delivery Channels** — Email only (in_app channel has been removed). Show a single "Email alerts" toggle.
-- **Active** — toggle switch
+- **Min Impact Score** — 5-button toggle (1–5) with the level name and description shown below the selected value. Default: 3 (Moderate).
+- **Event Types** — multi-select checkboxes (`tariff_change`, `sanctions`, `regulation`, `trade_agreement`, `trade_news`); empty = all types
+- **Email alerts** — single toggle (in_app channel removed)
+- **Active** — master toggle; when off, no alerts are sent regardless of other settings
 
-**Note**: The `email_critical_alerts` toggle in Org Settings controls critical-event emails org-wide. This per-user preference controls which event types and impact levels trigger personal alerts.
+**Note**: The `email_critical_alerts` setting in Org Settings controls org-wide critical-event emails (score = 5). This page controls the per-user threshold and event type filter for personal alerts.
 
 **Save** → `PATCH /api/v1/intel/notifications/preferences` with changed fields only → toast "Preferences saved"
 

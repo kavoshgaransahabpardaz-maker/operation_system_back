@@ -189,7 +189,13 @@ class UserInterestCreate(BaseModel):
             if not re.fullmatch(r"\d{6,10}", v):
                 raise ValueError("hs_code must be 6–10 digits")
             return v
-        return v  # party_name / industry — free text
+        if t in ("party_name", "industry"):
+            if not re.search(r"[A-Za-z]", v):
+                raise ValueError(f"{t.replace('_', ' ')} must contain letters")
+            if re.search(r"\d", v):
+                raise ValueError(f"{t.replace('_', ' ')} must not contain numbers")
+            return v
+        return v
 
 
 # ---------------------------------------------------------------------------
