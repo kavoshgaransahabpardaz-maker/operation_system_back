@@ -69,7 +69,7 @@ services:
     command: >
       celery -A app.core.celery_app worker
       --loglevel=info
-      -Q default,email,classification,matching
+      -Q default,email,classification,matching,intel_collect,intel_parse,intel_enrich,intel_notify
       --concurrency=4
     env_file: .env
     depends_on:
