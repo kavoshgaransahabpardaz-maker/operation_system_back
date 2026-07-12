@@ -58,8 +58,9 @@ async def find_near_duplicates(title: str, db: AsyncSession) -> list[str]:
     if not title or len(title) < 10:
         return []
 
-    # Try pg_trgm similarity first
+    # Try pg_trgm similarity first (savepoint so a failure doesn't abort the outer tx)
     try:
+        await db.execute(text("SAVEPOINT nd_trgm"))
         trgm_sql = text(
             """
             SELECT id FROM intel_articles
@@ -69,11 +70,15 @@ async def find_near_duplicates(title: str, db: AsyncSession) -> list[str]:
         )
         result = await db.execute(trgm_sql, {"title": title})
         rows = result.fetchall()
+        await db.execute(text("RELEASE SAVEPOINT nd_trgm"))
         if rows:
             return [str(row[0]) for row in rows]
     except Exception:
-        # pg_trgm not available — fall back to ILIKE
-        pass
+        # pg_trgm not available — roll back to savepoint to keep transaction valid
+        try:
+            await db.execute(text("ROLLBACK TO SAVEPOINT nd_trgm"))
+        except Exception:
+            pass
 
     # ILIKE fallback: match articles containing at least 70% of the title words
     try:
