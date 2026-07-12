@@ -35,6 +35,7 @@ celery_app.conf.update(
         "tasks.enrich_and_match_article": {"queue": "intel_enrich"},
         "tasks.match_article": {"queue": "intel_enrich"},
         "tasks.update_trending_topics": {"queue": "intel_enrich"},
+        "tasks.rematch_org_articles": {"queue": "intel_enrich"},
         "tasks.send_alert": {"queue": "intel_notify"},
     },
     beat_schedule={

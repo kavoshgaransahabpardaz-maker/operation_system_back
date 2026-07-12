@@ -65,15 +65,19 @@ async def score_article_for_org(
     article_industries = {t.tag.lower() for t in tags if t.tag_type == "industry"}
     article_companies = {t.tag for t in tags if t.tag_type == "company"}
 
-    org_hs = {i.value.lower() for i in interests if i.interest_type in ("hs_chapter", "hs_heading")}
+    org_hs = {i.value.lower() for i in interests if i.interest_type in ("hs_chapter", "hs_heading", "hs_code")}
     org_countries = {i.value.upper() for i in interests if i.interest_type == "country"}
     org_industries = {i.value.lower() for i in interests if i.interest_type == "industry"}
     org_parties = {i.value for i in interests if i.interest_type == "party_name"}
 
     score = 0.0
 
-    # 1. HS code match
-    if article_hs & org_hs:
+    # 1. HS code match — prefix-aware: "72" matches "720811" and vice versa
+    hs_match = any(
+        any(art.startswith(org) or org.startswith(art) for art in article_hs)
+        for org in org_hs
+    )
+    if hs_match:
         score += _HS_WEIGHT
 
     # 2. Country match

@@ -85,7 +85,13 @@ async def intel_feed(
 
     org_id = current_user.org_id
 
-    # IDs of articles that have matches for this org
+    # Check whether this org has any interests configured
+    has_interests_result = await db.execute(
+        select(func.count()).select_from(UserInterest).where(UserInterest.org_id == org_id)
+    )
+    org_has_interests = (has_interests_result.scalar() or 0) > 0
+
+    # IDs of articles matched to this org
     matched_ids_result = await db.execute(
         select(IntelMatch.article_id).where(IntelMatch.org_id == org_id).distinct()
     )
@@ -120,16 +126,22 @@ async def intel_feed(
                 )
             )
         )
-    if matched_only:
+
+    # When org has interests: show only matched articles (unless caller says matched_only=False).
+    # Fall back to all articles only when interests exist but no matches have been created yet
+    # (e.g. interests were just added and background re-matching hasn't finished).
+    if matched_only or (org_has_interests and matched_article_ids):
         query = query.where(IntelArticle.id.in_(matched_article_ids))
 
-    query = query.order_by(desc(IntelArticle.ingested_at)).offset(offset).limit(limit)
+    # Order matched articles first, then by impact score (desc), then ingested_at (desc)
+    query = query.order_by(
+        desc(IntelArticle.id.in_(matched_article_ids)),
+        desc(IntelEnrichment.impact_score),
+        desc(IntelArticle.ingested_at),
+    ).offset(offset).limit(limit)
 
     article_result = await db.execute(query)
     articles: list[IntelArticle] = list(article_result.scalars())
-
-    # Sort: matched articles first, then by ingested_at desc
-    articles.sort(key=lambda a: (0 if a.id in matched_article_ids else 1,))
 
     feed_items: list[IntelFeedItem] = []
     for article in articles:
@@ -298,6 +310,11 @@ async def add_interest(
     db.add(interest)
     await db.commit()
     await db.refresh(interest)
+
+    # Retroactively match existing articles against the new interest
+    from app.core.celery_app import celery_app as _celery
+    _celery.send_task("tasks.rematch_org_articles", args=[str(current_user.org_id)], queue="intel_enrich")
+
     return interest
 
 

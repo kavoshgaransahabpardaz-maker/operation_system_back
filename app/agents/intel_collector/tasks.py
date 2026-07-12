@@ -725,6 +725,33 @@ def enrich_and_match_article(self, article_id: str):
 
 
 # ---------------------------------------------------------------------------
+# rematch_org_articles — triggered when an org adds a new interest
+# ---------------------------------------------------------------------------
+
+@celery_app.task(name="tasks.rematch_org_articles", queue="intel_enrich")
+def rematch_org_articles(org_id: str):
+    """
+    Re-run matching for the past 60 days of enriched articles against one org.
+    Dispatched automatically when the org saves a new interest so that existing
+    articles are retroactively matched.
+    """
+    from app.core.database import AsyncSessionLocal
+    from app.modules.intel.matcher import rematch_recent_articles_for_org
+
+    org_uuid = uuid.UUID(org_id)
+
+    async def _run():
+        async with AsyncSessionLocal() as db:
+            count = await rematch_recent_articles_for_org(org_uuid, db, days=60)
+            logger.info("rematch_org_articles org=%s: %d new matches", org_id, count)
+
+    try:
+        _run_async(_run())
+    except Exception as exc:
+        logger.error("rematch_org_articles org=%s failed: %s", org_id, exc)
+
+
+# ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
 
