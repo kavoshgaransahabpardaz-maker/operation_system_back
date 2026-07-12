@@ -100,7 +100,7 @@ services:
       - .:/app
       - beat_data:/app/beat_data
     healthcheck:
-      test: ["CMD", "pgrep", "-f", "celery.*beat"]
+      test: ["CMD-SHELL", "cat /proc/1/cmdline | tr '\\0' ' ' | grep -q beat"]
       interval: 30s
       timeout: 10s
       retries: 3
