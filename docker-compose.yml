@@ -82,14 +82,17 @@ services:
 
   beat:
     build: .
-    command: celery -A app.core.celery_app beat --loglevel=info --scheduler celery.beat:PersistentScheduler
+    command: >
+      celery -A app.core.celery_app beat --loglevel=info
+      --scheduler celery.beat:PersistentScheduler
+      --schedule /app/beat_data/celerybeat-schedule
     env_file: .env
     depends_on:
       redis:
         condition: service_healthy
     volumes:
       - .:/app
-      - beat_data:/app/celerybeat-schedule
+      - beat_data:/app/beat_data
 
 volumes:
   postgres_data:
