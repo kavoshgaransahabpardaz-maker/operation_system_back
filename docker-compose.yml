@@ -63,6 +63,9 @@ services:
         condition: service_healthy
     volumes:
       - .:/app
+    networks:
+      - default
+      - nginx_internal
 
   worker:
     build: .
@@ -110,3 +113,12 @@ volumes:
   postgres_data:
   minio_data:
   beat_data:
+
+networks:
+  default:
+  nginx_internal:
+    # The nginx container lives on this pre-existing network. Attaching api here
+    # means nginx can always resolve the 'api' hostname after a rebuild without
+    # needing a manual docker network connect + nginx reload.
+    name: operation_system_back_internal
+    external: true
