@@ -5,13 +5,14 @@ PURE PYTHON — no LLM, no network.
 import csv
 import io
 
-_TABULAR_EXTENSIONS = {".xls", ".xlsx", ".csv", ".xml"}
+_TABULAR_EXTENSIONS = {".xls", ".xlsx", ".csv", ".xml", ".docx"}
 _TABULAR_CONTENT_TYPES = {
     "application/vnd.ms-excel",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "text/csv",
     "application/xml",
     "text/xml",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 
 
@@ -52,6 +53,10 @@ def parse_tabular(file_bytes: bytes, filename: str, content_type: str) -> str:
     # --- XML ---
     if ext == ".xml" or ct in {"application/xml", "text/xml"}:
         return _parse_xml(file_bytes)
+
+    # --- DOCX ---
+    if ext == ".docx" or ct == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        return _parse_docx(file_bytes)
 
     raise ValueError(
         f"Unsupported tabular format: extension={ext!r}, content_type={content_type!r}"
@@ -108,6 +113,27 @@ def _parse_xml(file_bytes: bytes) -> str:
     lines: list[str] = []
     _xml_to_lines(root, lines, indent=0)
     return "\n".join(lines)
+
+
+def _parse_docx(file_bytes: bytes) -> str:
+    try:
+        from docx import Document as DocxDocument  # type: ignore
+    except ImportError as exc:
+        raise ValueError("python-docx is required for DOCX parsing") from exc
+
+    try:
+        doc = DocxDocument(io.BytesIO(file_bytes))
+    except Exception as exc:
+        raise ValueError(f"Failed to open DOCX: {exc}") from exc
+
+    paragraphs = [para.text for para in doc.paragraphs if para.text.strip()]
+    # Also extract table cells
+    for table in doc.tables:
+        for row in table.rows:
+            row_text = "\t".join(cell.text.strip() for cell in row.cells)
+            if row_text.strip():
+                paragraphs.append(row_text)
+    return "\n".join(paragraphs)
 
 
 def _xml_to_lines(element, lines: list[str], indent: int) -> None:

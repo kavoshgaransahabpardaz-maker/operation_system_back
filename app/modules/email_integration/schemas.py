@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from app.modules.email_integration.models import EmailProvider
+from app.modules.email_integration.models import EmailProvider, _DEFAULT_EMAIL_KEYWORDS
 
 
 class ImapConnectionCreate(BaseModel):
@@ -13,6 +13,11 @@ class ImapConnectionCreate(BaseModel):
     password: str
 
 
+class EmailKeywordsUpdate(BaseModel):
+    # None means "no filter — download all"; empty list treated as no filter too
+    keywords: list[str] | None = None
+
+
 class MailboxConnectionOut(BaseModel):
     id: uuid.UUID
     org_id: uuid.UUID
@@ -20,6 +25,8 @@ class MailboxConnectionOut(BaseModel):
     email_address: str
     last_synced_at: datetime | None
     is_active: bool
+    # Expose effective keywords (substituting defaults when column is NULL)
+    email_keywords: list[str] = _DEFAULT_EMAIL_KEYWORDS
     created_at: datetime
 
     model_config = {"from_attributes": True}

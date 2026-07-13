@@ -13,7 +13,42 @@ from app.modules.user_management.models import User
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+MAX_FILE_SIZE = 1 * 1024 * 1024 * 1024  # 1 GB
+MAX_DOCUMENTS_PER_BATCH = 15
+
+ALLOWED_CONTENT_TYPES = {
+    "application/pdf",
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "text/csv",
+    "application/xml",
+    "text/xml",
+    "application/octet-stream",  # fallback when browser doesn't detect type
+}
+
+ALLOWED_EXTENSIONS = {
+    ".pdf", ".jpg", ".jpeg", ".png",
+    ".xls", ".xlsx", ".doc", ".docx",
+    ".csv", ".xml",
+}
+
+
+def _validate_file(filename: str, content_type: str, size_bytes: int) -> None:
+    if size_bytes > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File too large (max 1 GB)",
+        )
+    ext = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported file type '{ext}'. Allowed: PDF, JPEG, PNG, XLS, XLSX, DOCX, CSV, XML",
+        )
 
 
 @router.post("/upload", response_model=DocumentOut, status_code=201)
@@ -23,8 +58,7 @@ async def upload(
     db: AsyncSession = Depends(get_async_db),
 ):
     contents = await file.read()
-    if len(contents) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large (max 50MB)")
+    _validate_file(file.filename or "untitled", file.content_type or "", len(contents))
 
     doc = await service.upload_document(
         db=db,
@@ -37,6 +71,38 @@ async def upload(
         uploaded_by=current_user.id,
     )
     return doc
+
+
+@router.post("/upload/batch", response_model=list[DocumentOut], status_code=201)
+async def upload_batch(
+    files: list[UploadFile] = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    if len(files) > MAX_DOCUMENTS_PER_BATCH:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Too many files (max {MAX_DOCUMENTS_PER_BATCH} per upload)",
+        )
+
+    results = []
+    for file in files:
+        contents = await file.read()
+        _validate_file(file.filename or "untitled", file.content_type or "", len(contents))
+
+        doc = await service.upload_document(
+            db=db,
+            file_obj=io.BytesIO(contents),
+            filename=file.filename or "untitled",
+            content_type=file.content_type or "application/octet-stream",
+            size_bytes=len(contents),
+            org_id=current_user.org_id,
+            source=DocumentSource.UPLOAD,
+            uploaded_by=current_user.id,
+        )
+        results.append(doc)
+
+    return results
 
 
 @router.get("/", response_model=list[DocumentListOut])

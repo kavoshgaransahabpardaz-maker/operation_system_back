@@ -707,6 +707,15 @@ export const documentsApi = {
     });
   },
 
+  // Upload up to 15 files in one request (max 1 GB each)
+  uploadBatch: (files: File[]) => {
+    const fd = new FormData();
+    files.forEach(f => fd.append('files', f));
+    return apiClient.post<Document[]>('/api/v1/documents/upload/batch', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+
   list: (shipmentId?: string) =>
     apiClient.get<DocumentListItem[]>('/api/v1/documents/', {
       params: shipmentId ? { shipment_id: shipmentId } : {},
@@ -740,6 +749,13 @@ export const emailsApi = {
   sync: (connectionId: string) =>
     apiClient.post<{ status: string; connection_id: string }>(
       `/api/v1/email/connections/${connectionId}/sync`
+    ),
+
+  // keywords: null means "no filter"; pass array to restrict to those subjects
+  updateKeywords: (connectionId: string, keywords: string[] | null) =>
+    apiClient.patch<MailboxConnection>(
+      `/api/v1/email/connections/${connectionId}/keywords`,
+      { keywords }
     ),
 
   disconnect: (connectionId: string) =>
@@ -827,6 +843,7 @@ export const orgSettingsApi = {
     | 'doc_organization_by'
     | 'auto_fix_threshold'
     | 'email_critical_alerts'
+    | 'ocr_languages'
   >>) => apiClient.patch<OrgSettings>('/api/v1/org/settings', data),
 };
 ```
@@ -1519,12 +1536,16 @@ Save → `PATCH /api/v1/intel/notifications/preferences` + mark onboarding compl
 **Upload flow**:
 - Clicking "Upload Document" opens a `Dialog` containing a drag-and-drop zone
 - Also shows a file input button as fallback
-- Max file size: 50 MB (enforce client-side with a clear error message)
-- Accepted types: `application/pdf`, `image/*`
-- On file select → call `POST /api/v1/documents/upload` with `FormData`
-- Show upload progress with a spinner and filename
-- On success: close dialog, invalidate document list query, show toast "Document uploaded — processing started"
+- **Max file size: 1 GB** per file (enforce client-side with a clear error message)
+- **Max files per batch: 15** (multiple files can be selected at once)
+- **Accepted types**: PDF, JPEG/PNG (images), Excel (.xls/.xlsx), Word (.docx), CSV, XML
+  - `accept` attribute: `".pdf,.jpg,.jpeg,.png,.xls,.xlsx,.docx,.csv,.xml"`
+- Single file → call `POST /api/v1/documents/upload` with `FormData`
+- Multiple files → call `POST /api/v1/documents/upload/batch` with `FormData` (field name: `files`)
+- Show upload progress with a spinner and filename list
+- On success: close dialog, invalidate document list query, show toast "N document(s) uploaded — processing started"
 - On 409 conflict: show warning "This file has already been uploaded" with a link to the existing document
+- On 415 error: show "Unsupported file type" with the list of allowed types
 
 **Filter bar**: Status filter (All, Needs Review, Unmatched, classified) as segmented control or select.
 
@@ -1799,8 +1820,15 @@ Each card shows:
 - Email address
 - Last synced: relative date or "Never"
 - Active status dot (green/gray)
+- **Subject keywords**: chip list showing active keywords (default: "Commercial Invoice", "Packing list", "Bill of Materials"). Click "Edit Keywords" to open inline edit.
 - "Sync Now" button → calls `POST /api/v1/email/connections/:id/sync` → toast "Sync queued"
 - "Disconnect" button → confirm dialog → calls `DELETE /api/v1/email/connections/:id` → toast "Disconnected" + refresh list
+
+**Keyword editing**:
+- "Edit Keywords" opens a small popover/inline panel with a tag input (user can add/remove keywords)
+- Save → `PATCH /api/v1/email/connections/:id/keywords` with `{ keywords: string[] }`
+- Pass `{ keywords: null }` to disable filtering (accept all subjects)
+- Toast "Keywords updated" on success
 
 **Empty state**: Mail icon + "No email connections. Add one to start importing attachments automatically."
 
@@ -1881,6 +1909,24 @@ Note: `name_match_threshold` is stored as 0.0–1.0 on the backend (e.g. 0.93). 
 | `email_critical_alerts` | Email me for critical trade events | Toggle switch. When on, emails are sent for articles with `impact_score ≥ 4`. |
 
 Description: *"When auto-fix confidence exceeds the threshold, mismatches are resolved automatically. Set higher to require more certainty before auto-fixing."*
+
+**OCR Language Settings Card**
+
+| Field | Label | Notes |
+|---|---|---|
+| `ocr_languages` | OCR Languages | Multi-select checkboxes or tag selector. Value stored as comma-separated codes (e.g. `"eng,fra,deu"`). |
+
+Available languages:
+| Code | Language |
+|---|---|
+| `eng` | English (default) |
+| `fra` | French |
+| `bul` | Bulgarian |
+| `nld` | Dutch |
+| `deu` | German |
+| `ita` | Italian |
+
+Description: *"Select the languages to use when extracting text from scanned documents. Adding more languages increases accuracy for multilingual documents but may slow processing."*
 
 **"Save Settings"** button → `PATCH /api/v1/org/settings`  
 On success: toast "Settings saved", invalidate settings query.

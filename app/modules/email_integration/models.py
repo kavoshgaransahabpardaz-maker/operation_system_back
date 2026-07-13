@@ -3,10 +3,12 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+
+_DEFAULT_EMAIL_KEYWORDS = ["Commercial Invoice", "Packing list", "Bill of Materials"]
 
 
 class EmailProvider(str, enum.Enum):
@@ -31,6 +33,8 @@ class MailboxConnection(Base):
     imap_password_enc: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Nullable: None means "download all attachments regardless of subject"
+    email_keywords: Mapped[list[str] | None] = mapped_column(ARRAY(String(500)), nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     email_records: Mapped[list["EmailRecord"]] = relationship("EmailRecord", back_populates="connection")

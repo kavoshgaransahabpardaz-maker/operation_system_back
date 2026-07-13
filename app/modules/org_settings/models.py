@@ -29,6 +29,8 @@ class OrgSettings(Base):
     email_critical_alerts: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True
     )  # send email for impact_score >= 4 news
+    # Comma-separated tesseract language codes, e.g. "eng,fra,deu"
+    ocr_languages: Mapped[str] = mapped_column(String(200), nullable=False, default="eng")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

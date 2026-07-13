@@ -4,6 +4,9 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
+_SUPPORTED_OCR_LANGS = {"eng", "fra", "bul", "nld", "deu", "ita"}
+
+
 class OrgSettingsOut(BaseModel):
     id: uuid.UUID | None = None
     org_id: uuid.UUID
@@ -13,6 +16,7 @@ class OrgSettingsOut(BaseModel):
     doc_organization_by: str = "shipment"
     auto_fix_threshold: float = 0.95
     email_critical_alerts: bool = True
+    ocr_languages: str = "eng"
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -26,3 +30,5 @@ class OrgSettingsPatch(BaseModel):
     doc_organization_by: str | None = Field(None, pattern="^(shipment|client|lane|date)$")
     auto_fix_threshold: float | None = Field(None, ge=0.5, le=1.0)
     email_critical_alerts: bool | None = None
+    # Comma-separated language codes, e.g. "eng,fra,deu"
+    ocr_languages: str | None = Field(None, description="Comma-separated tesseract lang codes")

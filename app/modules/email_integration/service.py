@@ -17,6 +17,7 @@ from app.modules.email_integration.models import (
     EmailProvider,
     EmailRecord,
     MailboxConnection,
+    _DEFAULT_EMAIL_KEYWORDS,
 )
 
 SUPPORTED_ATTACHMENT_TYPES = {
@@ -83,6 +84,13 @@ def sync_imap_connection(db: Session, connection: MailboxConnection) -> dict:
             if existing:
                 continue
 
+            # Keyword filtering: skip emails whose subject doesn't match any keyword
+            effective_keywords = connection.email_keywords or _DEFAULT_EMAIL_KEYWORDS
+            if effective_keywords:
+                subject_raw = msg.get("Subject") or ""
+                if not any(kw.lower() in subject_raw.lower() for kw in effective_keywords):
+                    continue
+
             received_str = msg.get("Date")
             received_at = None
             if received_str:
@@ -146,6 +154,22 @@ def sync_imap_connection(db: Session, connection: MailboxConnection) -> dict:
     db.commit()
 
     return {"downloaded": downloaded, "errors": errors}
+
+
+def update_keywords_sync(
+    db: Session, org_id: uuid.UUID, connection_id: uuid.UUID, keywords: list[str] | None
+) -> MailboxConnection:
+    conn = db.query(MailboxConnection).filter(
+        MailboxConnection.id == connection_id,
+        MailboxConnection.org_id == org_id,
+        MailboxConnection.is_active == True,
+    ).first()
+    if not conn:
+        raise ValueError(f"Connection {connection_id} not found")
+    conn.email_keywords = keywords if keywords else None
+    db.commit()
+    db.refresh(conn)
+    return conn
 
 
 def get_connections(db: Session, org_id: uuid.UUID) -> list[MailboxConnection]:

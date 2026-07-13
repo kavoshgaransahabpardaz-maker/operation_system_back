@@ -48,6 +48,7 @@ trafilatura==2.0.0
 # Tabular ingestion
 openpyxl==3.1.5
 lxml==5.3.0
+python-docx==1.1.2
 
 # Email providers
 imapclient==3.0.1

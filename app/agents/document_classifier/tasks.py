@@ -51,9 +51,17 @@ def run_ocr_then_classify(self, document_id: str):
         else:
             # --- Normal OCR path ---
             from app.modules.ocr_processing.service import extract_text
+            from app.modules.org_settings.models import OrgSettings
+
+            ocr_lang = "eng"
+            if doc:
+                settings_row = db.query(OrgSettings).filter(OrgSettings.org_id == doc.org_id).first()
+                if settings_row and settings_row.ocr_languages:
+                    ocr_lang = settings_row.ocr_languages
+
             try:
-                logger.info(f"Starting OCR for document {document_id}")
-                extract_text(db, doc_uuid)
+                logger.info(f"Starting OCR for document {document_id} (lang={ocr_lang})")
+                extract_text(db, doc_uuid, ocr_lang=ocr_lang)
             except Exception as exc:
                 logger.error(f"OCR failed for {document_id}: {exc}")
                 raise self.retry(exc=exc, countdown=30)
