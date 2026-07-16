@@ -58,12 +58,32 @@ _PRODUCT_PER_ITEM_MAP: list[tuple[str, str, str]] = [
 ]
 
 
+_EXT_MIME: dict[str, str] = {
+    ".pdf":  "application/pdf",
+    ".png":  "image/png",
+    ".jpg":  "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".doc":  "application/msword",
+    ".csv":  "text/csv",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xls":  "application/vnd.ms-excel",
+}
+
+
+def _mime_for_filename(filename: str) -> str:
+    ext = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
+    return _EXT_MIME.get(ext, "application/octet-stream")
+
+
 async def call_classification_api(file_bytes: bytes, filename: str) -> dict:
     """POST file to external classification API and return parsed JSON."""
+    mime = _mime_for_filename(filename)
     async with httpx.AsyncClient(timeout=_API_TIMEOUT) as client:
         response = await client.post(
             _CLASSIFICATION_API_URL,
-            files={"file": (filename, file_bytes, "application/pdf")},
+            files={"file": (filename, file_bytes, mime)},
             data={"text": ""},
         )
         response.raise_for_status()

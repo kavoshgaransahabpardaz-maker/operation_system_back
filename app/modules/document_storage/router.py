@@ -21,6 +21,7 @@ ALLOWED_CONTENT_TYPES = {
     "image/jpeg",
     "image/jpg",
     "image/png",
+    "image/webp",
     "application/vnd.ms-excel",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -31,7 +32,7 @@ ALLOWED_CONTENT_TYPES = {
 }
 
 ALLOWED_EXTENSIONS = {
-    ".pdf", ".jpg", ".jpeg", ".png",
+    ".pdf", ".jpg", ".jpeg", ".png", ".webp",
     ".xls", ".xlsx", ".doc", ".docx",
     ".csv", ".xml",
 }
@@ -47,7 +48,7 @@ def _validate_file(filename: str, content_type: str, size_bytes: int) -> None:
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"Unsupported file type '{ext}'. Allowed: PDF, JPEG, PNG, XLS, XLSX, DOCX, CSV, XML",
+            detail=f"Unsupported file type '{ext}'. Allowed: PDF, JPEG, PNG, WEBP, XLS, XLSX, DOCX, CSV, XML",
         )
 
 
