@@ -12,7 +12,9 @@ LOW_CONFIDENCE_THRESHOLD = 0.70
 
 # Field names as string literals to avoid import cycles with schemas
 _ZERO_TOLERANCE_FIELDS = {"hs_code", "stated_origin", "currency"}
-_PCT_BAND_FIELDS = {"invoice_value", "gross_weight", "net_weight", "quantity"}
+# quantity excluded: per-product quantities are stored with field_name="quantity", making
+# cross-doc comparison meaningless at shipment level. Quantity is compared at product level.
+_PCT_BAND_FIELDS = {"invoice_value", "gross_weight", "net_weight"}
 _FUZZY_NAME_FIELDS = {"party_shipper", "party_consignee"}
 
 
@@ -57,10 +59,24 @@ def compare_shipment_fields(fields: list, settings) -> list[FlagSpec]:
 
     flag_specs: list[FlagSpec] = []
 
-    # Group by field_name
+    # Group by field_name, then deduplicate so we keep one value per document.
+    # This prevents multiple per-product ExtractedField rows (e.g. one invoice_value
+    # per product line) from being treated as cross-document conflicts.
+    # When a document has multiple rows for the same field_name, keep the one with the
+    # highest confidence (first processed wins on a tie, which is the shipment-level value
+    # since _SHIPMENT_FIELD_MAP is processed before _PRODUCT_PER_ITEM_MAP).
     by_name: dict[str, list] = {}
     for f in fields:
-        by_name.setdefault(f.field_name, []).append(f)
+        doc_id = str(f.document_id)
+        bucket = by_name.setdefault(f.field_name, [])
+        existing_idx = next(
+            (i for i, e in enumerate(bucket) if str(e.document_id) == doc_id),
+            None,
+        )
+        if existing_idx is None:
+            bucket.append(f)
+        elif f.confidence > bucket[existing_idx].confidence:
+            bucket[existing_idx] = f
 
     for fname, group in by_name.items():
         # ── Low confidence flags (per-field, info) ──────────────────────────
