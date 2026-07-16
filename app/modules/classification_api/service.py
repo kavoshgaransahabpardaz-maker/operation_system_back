@@ -50,12 +50,14 @@ _PRODUCT_COMMON_MAP: list[tuple[str, str, str]] = [
     ("currency", "currency", FieldType.ISO_CODE.value),
 ]
 
-# Per-product fields that produce one ExtractedField row per product
+# Per-product fields that produce one ExtractedField row per product.
+# quantity and unit_price are intentionally excluded: they are already stored in
+# DocumentProduct and must NOT be written as ExtractedField rows because having
+# one row per product causes the flags engine to see N different "quantity" /
+# "invoice_value" values within a single document and raise false mismatches.
 _PRODUCT_PER_ITEM_MAP: list[tuple[str, str, str]] = [
     ("product_name", "commodity_description", FieldType.STRING.value),
     ("existing_hs_code", "hs_code", FieldType.STRING.value),
-    ("quantity", "quantity", FieldType.DECIMAL.value),
-    ("unit_price", "invoice_value", FieldType.DECIMAL.value),
 ]
 
 
