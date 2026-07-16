@@ -79,6 +79,14 @@ def validate_decimal(value: str) -> tuple[bool, str]:
         return False, f"'{value}' cannot be parsed as a decimal number"
 
 
+def validate_eori(value: str) -> tuple[bool, str]:
+    import re
+    cleaned = re.sub(r"\s+", "", value.strip().upper())
+    if re.match(r"^[A-Z]{2}[A-Z0-9]{1,15}$", cleaned):
+        return True, ""
+    return False, f"'{value}' does not match EORI format (2-letter country code + up to 15 alphanumerics)"
+
+
 def validate_weight_sanity(net: str, gross: str) -> tuple[bool, str]:
     try:
         net_val = Decimal(net.strip().replace(",", ""))
@@ -97,11 +105,18 @@ def get_validator(field_name: str):
         FieldName.CURRENCY: validate_currency,
         FieldName.INCOTERM: validate_incoterm,
         FieldName.INVOICE_DATE: validate_date,
+        FieldName.DUE_DATE: validate_date,
         FieldName.SHIPMENT_DATE: validate_date,
+        FieldName.EXPIRY_DATE: validate_date,
         FieldName.INVOICE_VALUE: validate_decimal,
+        FieldName.VAT_VALUE: validate_decimal,
+        FieldName.FREIGHT_VALUE: validate_decimal,
+        FieldName.INSURANCE_VALUE: validate_decimal,
         FieldName.GROSS_WEIGHT: validate_decimal,
         FieldName.NET_WEIGHT: validate_decimal,
         FieldName.QUANTITY: validate_decimal,
+        FieldName.TOTAL_PACKAGES: validate_decimal,
+        FieldName.EORI_NUMBER: validate_eori,
     }
     try:
         from app.modules.field_extraction.schemas import FieldName as FN

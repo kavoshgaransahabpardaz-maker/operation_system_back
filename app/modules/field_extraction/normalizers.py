@@ -51,6 +51,16 @@ def normalize_incoterm(value_raw: str) -> str | None:
     return None
 
 
+def normalize_eori(value_raw: str) -> str | None:
+    """Uppercase and strip spaces from an EORI number."""
+    import re
+    cleaned = re.sub(r"\s+", "", value_raw.strip().upper())
+    # Basic pattern: 2-letter country code + up to 15 alphanumerics
+    if re.match(r"^[A-Z]{2}[A-Z0-9]{1,15}$", cleaned):
+        return cleaned
+    return cleaned or None
+
+
 def normalize_field(field_name: str, value_raw: str) -> str | None:
     """Dispatch to correct normalizer based on field_name."""
     from app.modules.field_extraction.schemas import FieldName
@@ -59,12 +69,31 @@ def normalize_field(field_name: str, value_raw: str) -> str | None:
     except ValueError:
         return None
 
-    if fn in (FieldName.INVOICE_VALUE, FieldName.GROSS_WEIGHT, FieldName.NET_WEIGHT, FieldName.QUANTITY):
+    _DECIMAL_FIELDS = {
+        FieldName.INVOICE_VALUE,
+        FieldName.VAT_VALUE,
+        FieldName.FREIGHT_VALUE,
+        FieldName.INSURANCE_VALUE,
+        FieldName.GROSS_WEIGHT,
+        FieldName.NET_WEIGHT,
+        FieldName.QUANTITY,
+        FieldName.TOTAL_PACKAGES,
+    }
+    _DATE_FIELDS = {
+        FieldName.INVOICE_DATE,
+        FieldName.DUE_DATE,
+        FieldName.SHIPMENT_DATE,
+        FieldName.EXPIRY_DATE,
+    }
+
+    if fn in _DECIMAL_FIELDS:
         return normalize_decimal(value_raw)
-    elif fn in (FieldName.INVOICE_DATE, FieldName.SHIPMENT_DATE):
+    elif fn in _DATE_FIELDS:
         return normalize_date(value_raw)
     elif fn == FieldName.CURRENCY:
         return normalize_currency(value_raw)
     elif fn == FieldName.INCOTERM:
         return normalize_incoterm(value_raw)
+    elif fn == FieldName.EORI_NUMBER:
+        return normalize_eori(value_raw)
     return None

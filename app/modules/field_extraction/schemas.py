@@ -8,23 +8,52 @@ from app.modules.field_extraction.models import ExtractedFieldStatus, FieldType
 
 
 class FieldName(str, enum.Enum):
-    PARTY_SHIPPER = "party_shipper"
-    PARTY_CONSIGNEE = "party_consignee"
+    # ── Parties ──────────────────────────────────────────────────────────────
+    PARTY_SHIPPER = "party_shipper"           # seller / consignor: name + address
+    PARTY_CONSIGNEE = "party_consignee"       # buyer / consignee: name + address
+    VAT_NUMBER_SELLER = "vat_number_seller"   # seller VAT / EIK (Bulgaria) / TVA etc.
+    VAT_NUMBER_BUYER = "vat_number_buyer"     # buyer VAT number
+    REX_NUMBER_SELLER = "rex_number_seller"   # seller Registered Exporter number
+    REX_NUMBER_BUYER = "rex_number_buyer"     # buyer REX number
+    EORI_NUMBER = "eori_number"               # Economic Operators Registration & ID
+
+    # ── Financials ───────────────────────────────────────────────────────────
     INVOICE_VALUE = "invoice_value"
+    VAT_VALUE = "vat_value"                   # VAT amount
+    FREIGHT_VALUE = "freight_value"           # freight cost
+    INSURANCE_VALUE = "insurance_value"       # insurance cost
     CURRENCY = "currency"
+
+    # ── Weights & measures ───────────────────────────────────────────────────
     GROSS_WEIGHT = "gross_weight"
     NET_WEIGHT = "net_weight"
     QUANTITY = "quantity"
+    TOTAL_PACKAGES = "total_packages"
+
+    # ── Product ──────────────────────────────────────────────────────────────
     HS_CODE = "hs_code"
-    STATED_ORIGIN = "stated_origin"
-    INCOTERM = "incoterm"
-    INVOICE_DATE = "invoice_date"
-    SHIPMENT_DATE = "shipment_date"
-    REFERENCE = "reference"
-    LOCAL_REFERENCE = "local_reference"
-    DESTINATION_COUNTRY = "destination_country"
-    POINT_OF_ENTRY = "point_of_entry"
     COMMODITY_DESCRIPTION = "commodity_description"
+    LOT_NUMBER = "lot_number"
+    PRODUCT_REGISTRATION_NUMBER = "product_registration_number"
+    PRODUCT_SERIAL_NUMBER = "product_serial_number"
+
+    # ── Trade terms & compliance ─────────────────────────────────────────────
+    STATED_ORIGIN = "stated_origin"
+    DESTINATION_COUNTRY = "destination_country"
+    PLACE_OF_LOADING = "place_of_loading"
+    INCOTERM = "incoterm"
+    PREFERENTIAL_DUTY = "preferential_duty"   # self-certification statement text or "yes"
+
+    # ── Dates ────────────────────────────────────────────────────────────────
+    INVOICE_DATE = "invoice_date"
+    DUE_DATE = "due_date"
+    SHIPMENT_DATE = "shipment_date"
+    EXPIRY_DATE = "expiry_date"
+
+    # ── Identifiers ──────────────────────────────────────────────────────────
+    REFERENCE = "reference"                   # invoice / packing-list number
+    LOCAL_REFERENCE = "local_reference"
+    POINT_OF_ENTRY = "point_of_entry"
 
 
 class ExtractedFieldOut(BaseModel):

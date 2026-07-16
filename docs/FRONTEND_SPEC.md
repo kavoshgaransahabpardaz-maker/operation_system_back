@@ -126,23 +126,46 @@ export type ActivityAction =
 // ── NEW: Field extraction ──────────────────────────────────────────────────
 
 export type FieldName =
-  | 'party_shipper'
-  | 'party_consignee'
+  // ── Parties ──────────────────────────────────────────────────────────────
+  | 'party_shipper'                  // seller / consignor full name + address
+  | 'party_consignee'                // buyer / consignee full name + address
+  | 'vat_number_seller'              // seller VAT / EIK (BG) / TVA etc.
+  | 'vat_number_buyer'               // buyer VAT number
+  | 'rex_number_seller'              // seller Registered Exporter number
+  | 'rex_number_buyer'               // buyer REX number
+  | 'eori_number'                    // EORI (2-letter country + digits)
+  // ── Financials ───────────────────────────────────────────────────────────
   | 'invoice_value'
+  | 'vat_value'                      // VAT amount (CI)
+  | 'freight_value'                  // freight cost (PL)
+  | 'insurance_value'                // insurance cost (PL)
   | 'currency'
+  // ── Weights & measures ───────────────────────────────────────────────────
   | 'gross_weight'
   | 'net_weight'
   | 'quantity'
+  | 'total_packages'                 // total package count (PL)
+  // ── Product ──────────────────────────────────────────────────────────────
   | 'hs_code'
+  | 'commodity_description'
+  | 'lot_number'
+  | 'product_registration_number'
+  | 'product_serial_number'
+  // ── Trade terms & compliance ─────────────────────────────────────────────
   | 'stated_origin'
+  | 'destination_country'
+  | 'place_of_loading'
   | 'incoterm'
+  | 'preferential_duty'              // self-certification statement text or "yes"
+  // ── Dates ────────────────────────────────────────────────────────────────
   | 'invoice_date'
+  | 'due_date'                       // payment due date (CI)
   | 'shipment_date'
+  | 'expiry_date'                    // product / certificate expiry
+  // ── Identifiers ──────────────────────────────────────────────────────────
   | 'reference'
-  | 'local_reference'        // phytosanitary: NPPO local reference
-  | 'destination_country'    // phytosanitary: ISO country code of destination
-  | 'point_of_entry'         // phytosanitary: port/border entry point
-  | 'commodity_description'; // phytosanitary: description of plants/goods
+  | 'local_reference'                // phytosanitary NPPO reference
+  | 'point_of_entry';                // phytosanitary port / border entry
 
 export type FieldStatus = 'extracted' | 'confirmed' | 'corrected';
 
@@ -1774,6 +1797,49 @@ Layout: one row per unique `field_name`.
 - "Confirm" + "Correct" buttons (same behavior as Document Detail)
 
 **Empty state**: Spinner if documents are still being processed. "No fields extracted yet — fields are extracted automatically after classification."
+
+**Field name labels** (`FIELD_NAME_LABELS` constant):
+
+| field_name | Display label |
+|---|---|
+| `party_shipper` | Seller / Consignor |
+| `vat_number_seller` | Seller VAT / EIK |
+| `rex_number_seller` | Seller REX Number |
+| `party_consignee` | Buyer / Consignee |
+| `vat_number_buyer` | Buyer VAT Number |
+| `rex_number_buyer` | Buyer REX Number |
+| `eori_number` | EORI Number |
+| `invoice_value` | Invoice Value |
+| `vat_value` | VAT Amount |
+| `freight_value` | Freight Value |
+| `insurance_value` | Insurance Value |
+| `currency` | Currency |
+| `gross_weight` | Gross Weight |
+| `net_weight` | Net Weight |
+| `quantity` | Quantity |
+| `total_packages` | Total Packages |
+| `hs_code` | HS / Commodity Code |
+| `commodity_description` | Product Description |
+| `lot_number` | Lot Number |
+| `product_registration_number` | Product Reg. No. |
+| `product_serial_number` | Serial Number |
+| `stated_origin` | Country of Origin |
+| `destination_country` | Destination Country |
+| `place_of_loading` | Place of Loading |
+| `incoterm` | Incoterm |
+| `preferential_duty` | Preferential Duty |
+| `invoice_date` | Invoice Date |
+| `due_date` | Payment Due Date |
+| `shipment_date` | Shipment Date |
+| `expiry_date` | Expiry Date |
+| `reference` | Reference / Invoice No. |
+| `local_reference` | Local Reference |
+| `point_of_entry` | Point of Entry |
+
+**Special display rules:**
+- `preferential_duty`: show as a highlighted info box with the full statement text, not just a value chip. Flag with a "Preferential" badge on the document card.
+- `eori_number`, `vat_number_*`, `rex_number_*`: show as monospace pill.
+- `currency`: when displaying financial values, always append the resolved currency next to amounts.
 
 ---
 
