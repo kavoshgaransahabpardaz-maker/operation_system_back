@@ -1,6 +1,7 @@
 import enum
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -92,3 +93,22 @@ class LLMFieldItem(BaseModel):
 
 class LLMFieldsResponse(BaseModel):
     fields: list[LLMFieldItem]
+
+
+# Mismatch detection schemas
+class MismatchValue(BaseModel):
+    document_id: uuid.UUID
+    value_raw: str
+    value_normalized: str | None
+    confidence: float
+
+
+class FieldMismatch(BaseModel):
+    field_name: str
+    severity: Literal["warning", "error"]
+    values: list[MismatchValue]
+
+
+class ShipmentMismatchOut(BaseModel):
+    shipment_id: uuid.UUID
+    mismatches: list[FieldMismatch]

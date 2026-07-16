@@ -1843,6 +1843,76 @@ Layout: one row per unique `field_name`.
 
 ---
 
+#### Field Mismatch Panel — NEW
+
+Source: `GET /api/v1/shipments/:id/field-mismatches`
+
+This endpoint performs a real-time cross-document comparison for the shipment and returns fields where different documents report conflicting values. It is **separate from the Flags system** — it is a lightweight computed diff, not stored flags.
+
+**Response shape**:
+```typescript
+interface MismatchValue {
+  document_id: string;
+  value_raw: string;
+  value_normalized: string | null;
+  confidence: number;
+}
+
+interface FieldMismatch {
+  field_name: string;           // e.g. "gross_weight"
+  severity: 'error' | 'warning';
+  values: MismatchValue[];      // one entry per document that has this field
+}
+
+interface ShipmentMismatchOut {
+  shipment_id: string;
+  mismatches: FieldMismatch[];
+}
+```
+
+**Fields checked** (in priority order):
+| field_name | severity |
+|---|---|
+| `gross_weight` | error |
+| `net_weight` | error |
+| `currency` | error |
+| `hs_code` | error |
+| `invoice_value` | error |
+| `stated_origin` | error |
+| `destination_country` | warning |
+| `incoterm` | warning |
+| `party_shipper` | warning |
+| `party_consignee` | warning |
+
+**Comparison rules (backend):**
+- Decimal fields (`gross_weight`, `net_weight`, `invoice_value`): compare as numbers after stripping units/symbols. Exact Decimal equality required.
+- ISO code fields (`currency`, `stated_origin`, `destination_country`, `incoterm`, `hs_code`): case-insensitive exact match.
+- String fields (`party_shipper`, `party_consignee`): case-insensitive, whitespace-stripped comparison.
+
+**UI placement**: Show inline in the Extracted Fields Panel as a collapsible "Mismatches" row above the field table if `mismatches.length > 0`.
+
+**Mismatch badge**: In the Shipment Detail tab bar, show a red dot / count badge on the "Fields" tab if there are any `error`-severity mismatches.
+
+**API function** (`src/api/fields.ts`):
+```typescript
+getShipmentMismatches: (shipmentId: string) =>
+  api.get(`/shipments/${shipmentId}/field-mismatches`).then(r => r.data as ShipmentMismatchOut),
+```
+
+**Query key** (add to `queryKeys`):
+```typescript
+shipmentMismatches: (id: string) => ['shipmentMismatches', id],
+```
+
+**Invalidation**: invalidate `shipmentMismatches` whenever fields are confirmed, corrected, or a new document is uploaded to the shipment.
+
+---
+
+**Universal extraction note** (behaviour change as of this version):
+Every uploaded document now attempts extraction of ALL fields from both Commercial Invoice and Packing List schemas, regardless of document type. The LLM only returns fields it actually finds — so a Bill of Lading will not produce invoice_value, but it will produce party_shipper, gross_weight, hs_code, etc. if those appear in the document. This means the extracted fields list on a shipment is richer, and cross-document mismatches are detected earlier.
+
+---
+
 **Activity Log section**
 Source: `GET /api/v1/workspace/shipments/:id/activity`
 

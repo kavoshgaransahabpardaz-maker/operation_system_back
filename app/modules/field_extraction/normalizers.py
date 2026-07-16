@@ -7,12 +7,14 @@ from decimal import Decimal, InvalidOperation
 
 
 def normalize_decimal(value_raw: str) -> str | None:
-    """Strip commas, currency symbols, whitespace; return canonical Decimal string."""
+    """Strip commas, currency symbols, unit suffixes, whitespace; return canonical Decimal string."""
+    import re
     cleaned = value_raw.strip()
-    # Remove currency symbols
     for sym in ("$", "£", "€", "¥", "₹", "₩", "₪", "₫", "฿"):
         cleaned = cleaned.replace(sym, "")
     cleaned = cleaned.replace(",", "").strip()
+    # Strip trailing unit (e.g. "kg", "lbs", "MT", "pcs", "KGS")
+    cleaned = re.sub(r"\s*[A-Za-z]+$", "", cleaned).strip()
     try:
         return str(Decimal(cleaned))
     except InvalidOperation:

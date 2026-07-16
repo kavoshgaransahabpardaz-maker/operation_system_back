@@ -2,11 +2,15 @@
 Field extraction service.
 Calls OpenAI to extract structured fields from document OCR text,
 validates and normalizes each field, then bulk-inserts ExtractedField rows.
+
+Universal extraction: every document is scanned for all CI+PL fields defined
+in UNIVERSAL_FIELDS. The LLM only returns fields actually present in the text,
+so non-relevant fields are naturally omitted.
 """
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -23,93 +27,75 @@ from app.modules.ocr_processing.models import OcrResult
 
 logger = logging.getLogger(__name__)
 
-# Fields expected per document type
-DOC_TYPE_FIELDS: dict[str, list[FieldName]] = {
-    "commercial_invoice": [
-        FieldName.PARTY_SHIPPER,
-        FieldName.VAT_NUMBER_SELLER,
-        FieldName.REX_NUMBER_SELLER,
-        FieldName.PARTY_CONSIGNEE,
-        FieldName.VAT_NUMBER_BUYER,
-        FieldName.REX_NUMBER_BUYER,
-        FieldName.EORI_NUMBER,
-        FieldName.INVOICE_VALUE,
-        FieldName.VAT_VALUE,
-        FieldName.CURRENCY,
-        FieldName.GROSS_WEIGHT,
-        FieldName.NET_WEIGHT,
-        FieldName.QUANTITY,
-        FieldName.HS_CODE,
-        FieldName.COMMODITY_DESCRIPTION,
-        FieldName.STATED_ORIGIN,
-        FieldName.INCOTERM,
-        FieldName.PREFERENTIAL_DUTY,
-        FieldName.INVOICE_DATE,
-        FieldName.DUE_DATE,
-        FieldName.REFERENCE,
-    ],
-    "packing_list": [
-        FieldName.PARTY_SHIPPER,
-        FieldName.VAT_NUMBER_SELLER,
-        FieldName.REX_NUMBER_SELLER,
-        FieldName.PARTY_CONSIGNEE,
-        FieldName.VAT_NUMBER_BUYER,
-        FieldName.REX_NUMBER_BUYER,
-        FieldName.EORI_NUMBER,
-        FieldName.STATED_ORIGIN,
-        FieldName.DESTINATION_COUNTRY,
-        FieldName.PLACE_OF_LOADING,
-        FieldName.GROSS_WEIGHT,
-        FieldName.NET_WEIGHT,
-        FieldName.QUANTITY,
-        FieldName.TOTAL_PACKAGES,
-        FieldName.CURRENCY,
-        FieldName.FREIGHT_VALUE,
-        FieldName.INSURANCE_VALUE,
-        FieldName.REFERENCE,
-        FieldName.LOT_NUMBER,
-        FieldName.PRODUCT_REGISTRATION_NUMBER,
-        FieldName.PRODUCT_SERIAL_NUMBER,
-        FieldName.EXPIRY_DATE,
-        FieldName.SHIPMENT_DATE,
-    ],
-    "bill_of_lading": [
-        FieldName.PARTY_SHIPPER,
-        FieldName.PARTY_CONSIGNEE,
-        FieldName.EORI_NUMBER,
-        FieldName.GROSS_WEIGHT,
-        FieldName.QUANTITY,
-        FieldName.STATED_ORIGIN,
-        FieldName.INCOTERM,
-        FieldName.SHIPMENT_DATE,
-        FieldName.REFERENCE,
-    ],
-    "air_waybill": [
-        FieldName.PARTY_SHIPPER,
-        FieldName.PARTY_CONSIGNEE,
-        FieldName.GROSS_WEIGHT,
-        FieldName.QUANTITY,
-        FieldName.STATED_ORIGIN,
-        FieldName.SHIPMENT_DATE,
-        FieldName.REFERENCE,
-    ],
-    "phytosanitary_certificate": [
-        FieldName.REFERENCE,
-        FieldName.LOCAL_REFERENCE,
-        FieldName.PARTY_SHIPPER,
-        FieldName.PARTY_CONSIGNEE,
-        FieldName.STATED_ORIGIN,
-        FieldName.DESTINATION_COUNTRY,
-        FieldName.HS_CODE,
-        FieldName.COMMODITY_DESCRIPTION,
-        FieldName.GROSS_WEIGHT,
-        FieldName.QUANTITY,
-        FieldName.SHIPMENT_DATE,
-        FieldName.EXPIRY_DATE,
-        FieldName.POINT_OF_ENTRY,
-    ],
+# ── Universal fields ─────────────────────────────────────────────────────────
+# Attempted for every uploaded document regardless of type.
+# The LLM only returns fields it actually finds in the text.
+UNIVERSAL_FIELDS: list[FieldName] = [
+    # Parties
+    FieldName.PARTY_SHIPPER,
+    FieldName.VAT_NUMBER_SELLER,
+    FieldName.REX_NUMBER_SELLER,
+    FieldName.PARTY_CONSIGNEE,
+    FieldName.VAT_NUMBER_BUYER,
+    FieldName.REX_NUMBER_BUYER,
+    FieldName.EORI_NUMBER,
+    # Financials
+    FieldName.INVOICE_VALUE,
+    FieldName.VAT_VALUE,
+    FieldName.FREIGHT_VALUE,
+    FieldName.INSURANCE_VALUE,
+    FieldName.CURRENCY,
+    # Weights & quantities
+    FieldName.GROSS_WEIGHT,
+    FieldName.NET_WEIGHT,
+    FieldName.QUANTITY,
+    FieldName.TOTAL_PACKAGES,
+    # Product
+    FieldName.HS_CODE,
+    FieldName.COMMODITY_DESCRIPTION,
+    FieldName.LOT_NUMBER,
+    FieldName.PRODUCT_REGISTRATION_NUMBER,
+    FieldName.PRODUCT_SERIAL_NUMBER,
+    # Trade terms & compliance
+    FieldName.STATED_ORIGIN,
+    FieldName.DESTINATION_COUNTRY,
+    FieldName.PLACE_OF_LOADING,
+    FieldName.INCOTERM,
+    FieldName.PREFERENTIAL_DUTY,
+    # Dates
+    FieldName.INVOICE_DATE,
+    FieldName.DUE_DATE,
+    FieldName.SHIPMENT_DATE,
+    FieldName.EXPIRY_DATE,
+    # Identifiers
+    FieldName.REFERENCE,
+    FieldName.LOCAL_REFERENCE,
+    FieldName.POINT_OF_ENTRY,
+]
+
+# Fields checked for cross-document consistency within a shipment
+MISMATCH_CHECK_FIELDS: set[str] = {
+    FieldName.GROSS_WEIGHT.value,
+    FieldName.NET_WEIGHT.value,
+    FieldName.CURRENCY.value,
+    FieldName.STATED_ORIGIN.value,
+    FieldName.DESTINATION_COUNTRY.value,
+    FieldName.HS_CODE.value,
+    FieldName.INCOTERM.value,
+    FieldName.PARTY_SHIPPER.value,
+    FieldName.PARTY_CONSIGNEE.value,
+    FieldName.INVOICE_VALUE.value,
 }
-_DEFAULT_FIELDS = [FieldName.REFERENCE]
+
+# These mismatches are blocking / high-severity
+MISMATCH_CRITICAL_FIELDS: set[str] = {
+    FieldName.GROSS_WEIGHT.value,
+    FieldName.NET_WEIGHT.value,
+    FieldName.CURRENCY.value,
+    FieldName.HS_CODE.value,
+    FieldName.INVOICE_VALUE.value,
+    FieldName.STATED_ORIGIN.value,
+}
 
 # Field-type mapping for metadata
 _FIELD_TYPE_MAP: dict[FieldName, FieldType] = {
@@ -131,68 +117,73 @@ _FIELD_TYPE_MAP: dict[FieldName, FieldType] = {
     FieldName.EXPIRY_DATE: FieldType.DATE,
 }
 
+_DECIMAL_FIELD_NAMES: set[str] = {
+    fn.value for fn, ft in _FIELD_TYPE_MAP.items() if ft == FieldType.DECIMAL
+}
+
 # Per-doc-type extraction notes injected into the LLM prompt
 _DOC_TYPE_NOTES: dict[str, str] = {
     "commercial_invoice": (
-        "IMPORTANT extraction rules for Commercial Invoice:\n"
+        "DOCUMENT-SPECIFIC RULES (Commercial Invoice):\n"
         "- party_shipper: full seller name + address as one string.\n"
         "- party_consignee: full buyer name + address as one string.\n"
-        "- vat_number_seller / vat_number_buyer: extract the VAT registration number. "
+        "- vat_number_seller / vat_number_buyer: VAT registration number. "
         "EU formats vary: Bulgaria uses EIK (9-digit), Germany DE+9 digits, FR+11 chars, etc. "
         "Look for labels: 'VAT No', 'TVA', 'USt-IdNr', 'EIK', 'ДДС номер'.\n"
         "- rex_number_seller / rex_number_buyer: look for 'REX' followed by country code + digits, "
         "e.g. 'REX BG123456789'.\n"
-        "- eori_number: format is 2-letter country code + up to 15 alphanumeric chars, e.g. 'GB123456789000'.\n"
-        "- preferential_duty: if the document contains a self-certification statement or origin declaration "
-        "for preferential tariff treatment (phrases like 'preferential origin', 'origin declaration', "
+        "- eori_number: 2-letter country code + up to 15 alphanumeric chars, e.g. 'GB123456789000'.\n"
+        "- preferential_duty: if the document contains a self-certification statement or origin "
+        "declaration (phrases like 'preferential origin', 'origin declaration', "
         "'The exporter of the products covered by this document declares...'), "
-        "extract the full statement as value_raw and set confidence high.\n"
-        "- currency: if the invoice shows two currencies, return the currency of the DESTINATION country "
+        "extract the full statement and set confidence high.\n"
+        "- currency: if two currencies appear, return the currency of the DESTINATION country "
         "(e.g. for imports to UK prioritise GBP over EUR).\n"
-        "- invoice_value: total invoice value in the identified currency (exclude VAT).\n"
+        "- invoice_value: total value in the identified currency (exclude VAT).\n"
         "- vat_value: the VAT/tax amount separately.\n"
         "- due_date: payment due date, distinct from invoice_date.\n"
     ),
     "packing_list": (
-        "IMPORTANT extraction rules for Packing List:\n"
+        "DOCUMENT-SPECIFIC RULES (Packing List):\n"
         "- party_shipper is the CONSIGNOR (sender); party_consignee is the CONSIGNEE (receiver).\n"
-        "- vat_number_seller / rex_number_seller: for the consignor.\n"
-        "- vat_number_buyer / rex_number_buyer: for the consignee.\n"
-        "- eori_number: look for EORI label (2-letter country + digits).\n"
-        "- reference: the packing list number AND/OR invoice number (include both if present, "
-        "semicolon-separated); this links the packing list to the commercial invoice.\n"
+        "- reference: include BOTH the packing list number AND the invoice number if present "
+        "(semicolon-separated); this links the packing list to the commercial invoice.\n"
         "- lot_number: batch or lot number for the goods.\n"
         "- product_registration_number: regulatory registration number if shown.\n"
         "- product_serial_number: serial number of the goods.\n"
         "- expiry_date: expiration / best-before date.\n"
         "- total_packages: total count of packages/boxes/pallets.\n"
-        "- freight_value and insurance_value: extract if shown as separate line items.\n"
+        "- freight_value / insurance_value: extract if shown as separate line items.\n"
     ),
 }
 
 _CONFIDENCE_PENALTY = 0.2
 
 
-def _build_prompt(doc_type: str, field_names: list[FieldName], ocr_text: str) -> str:
-    field_list = ", ".join(fn.value for fn in field_names)
-    notes = _DOC_TYPE_NOTES.get(doc_type, "")
+def _build_prompt(doc_type: str, ocr_text: str) -> str:
+    field_list = ", ".join(fn.value for fn in UNIVERSAL_FIELDS)
+    doc_notes = _DOC_TYPE_NOTES.get(doc_type, "")
     return (
-        f"You are a specialist customs document parser. "
-        f"Extract structured data from the document text below.\n"
-        f"Document type: {doc_type}\n"
-        f"Fields to extract: {field_list}\n\n"
-        f"{notes}\n"
-        f"Return a JSON object with a single key 'fields' containing an array of objects.\n"
-        f"Each object must have:\n"
-        f"  - field_name: one of [{field_list}]\n"
-        f"  - value_raw: the exact text as it appears in the document\n"
-        f"  - confidence: float 0.0-1.0\n"
-        f"  - page_number: integer or null\n\n"
-        f"Rules:\n"
-        f"- Only include fields that are actually present in the document.\n"
-        f"- Do not fabricate values. If a field is absent, omit it.\n"
-        f"- For dates, extract exactly as shown (normalisation happens server-side).\n"
-        f"- For weights, include the unit in value_raw (e.g. '125.5 kg').\n\n"
+        "You are a specialist customs document parser.\n"
+        "Extract structured data from the document text below.\n"
+        f"Document type: {doc_type}\n\n"
+        "UNIVERSAL EXTRACTION RULES:\n"
+        "- Scan for ANY of the following fields, regardless of document type.\n"
+        "- Only include fields that are ACTUALLY PRESENT in the document. Do not fabricate.\n"
+        "- party_shipper: full seller/consignor name + address as one string.\n"
+        "- party_consignee: full buyer/consignee name + address as one string.\n"
+        "- For dates, extract exactly as shown (normalisation happens server-side).\n"
+        "- For weights/quantities, include the unit in value_raw (e.g. '830.0 kg').\n"
+        "- For hs_code: commodity/tariff code (6-10 digits, may contain dots or spaces).\n"
+        "- For eori_number: 2-letter country code + up to 15 alphanumeric chars.\n"
+        f"\n{doc_notes}"
+        f"\nFields to extract: {field_list}\n\n"
+        "Return a JSON object with a single key 'fields' containing an array of objects.\n"
+        "Each object must have:\n"
+        "  - field_name: one of the fields listed above\n"
+        "  - value_raw: the exact text as it appears in the document\n"
+        "  - confidence: float 0.0-1.0\n"
+        "  - page_number: integer or null\n\n"
         f"Document text:\n{ocr_text[:8000]}"
     )
 
@@ -210,23 +201,18 @@ async def extract_fields(document_id: uuid.UUID, db: AsyncSession) -> list[Extra
     if not ocr:
         raise ValueError(f"No OCR result for document {document_id}")
 
-    # 3. Load classification
+    # 3. Load classification (for doc-type-specific prompt notes)
     cls_result = await db.execute(
         select(ClassificationResult).where(ClassificationResult.document_id == document_id)
     )
     classification = cls_result.scalar_one_or_none()
-
     doc_type = classification.doc_type.value if classification else "other"
-    field_names = DOC_TYPE_FIELDS.get(doc_type, _DEFAULT_FIELDS)
 
-    if not field_names:
-        return []
-
-    # 4. Call OpenAI
+    # 4. Call OpenAI with universal field set
     from openai import AsyncOpenAI
     client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
-    prompt = _build_prompt(doc_type, field_names, ocr.raw_text)
+    prompt = _build_prompt(doc_type, ocr.raw_text)
     response = await client.chat.completions.create(
         model=settings.OPENAI_MODEL,
         messages=[
@@ -251,8 +237,7 @@ async def extract_fields(document_id: uuid.UUID, db: AsyncSession) -> list[Extra
     # 6. Validate + normalize each field, build ORM rows
     inserted: list[ExtractedField] = []
     for item in parsed.fields:
-        confidence = float(item.confidence)
-        confidence = max(0.0, min(1.0, confidence))
+        confidence = max(0.0, min(1.0, float(item.confidence)))
 
         validator = get_validator(item.field_name)
         if validator is not None:
@@ -291,5 +276,77 @@ async def extract_fields(document_id: uuid.UUID, db: AsyncSession) -> list[Extra
     for ef in inserted:
         await db.refresh(ef)
 
-    logger.info("Extracted %d fields for document %s", len(inserted), document_id)
+    logger.info("Extracted %d fields for document %s (type: %s)", len(inserted), document_id, doc_type)
     return inserted
+
+
+def _effective_value(ef: ExtractedField) -> str:
+    """Return the best available value for a field (corrected > normalized > raw)."""
+    if ef.corrected_value:
+        return ef.corrected_value.strip()
+    return (ef.value_normalized or ef.value_raw).strip()
+
+
+def _values_match(field_name: str, a: str, b: str) -> bool:
+    """Return True if two field values are considered equivalent."""
+    if field_name in _DECIMAL_FIELD_NAMES:
+        try:
+            return Decimal(a) == Decimal(b)
+        except InvalidOperation:
+            pass
+    return a.lower() == b.lower()
+
+
+async def detect_shipment_mismatches(
+    shipment_id: uuid.UUID, db: AsyncSession
+) -> list[dict]:
+    """
+    Compare extracted field values across all documents in a shipment.
+    Returns a list of mismatch dicts for fields where documents disagree.
+    """
+    result = await db.execute(
+        select(ExtractedField).where(
+            ExtractedField.shipment_id == shipment_id,
+            ExtractedField.field_name.in_(MISMATCH_CHECK_FIELDS),
+        )
+    )
+    all_fields = list(result.scalars())
+
+    # Group by field_name → document_id → best field (highest confidence)
+    by_field: dict[str, dict[str, ExtractedField]] = {}
+    for f in all_fields:
+        doc_key = str(f.document_id)
+        if f.field_name not in by_field:
+            by_field[f.field_name] = {}
+        existing = by_field[f.field_name].get(doc_key)
+        if existing is None or f.confidence > existing.confidence:
+            by_field[f.field_name][doc_key] = f
+
+    mismatches = []
+    for field_name, by_doc in by_field.items():
+        if len(by_doc) < 2:
+            continue  # only one document has this field — nothing to compare
+
+        doc_fields = list(by_doc.values())
+        effective = [_effective_value(ef) for ef in doc_fields]
+
+        # Check if all values agree
+        all_match = all(_values_match(field_name, effective[0], v) for v in effective[1:])
+        if all_match:
+            continue
+
+        mismatches.append({
+            "field_name": field_name,
+            "severity": "error" if field_name in MISMATCH_CRITICAL_FIELDS else "warning",
+            "values": [
+                {
+                    "document_id": ef.document_id,
+                    "value_raw": ef.value_raw,
+                    "value_normalized": ef.value_normalized,
+                    "confidence": ef.confidence,
+                }
+                for ef in doc_fields
+            ],
+        })
+
+    return mismatches

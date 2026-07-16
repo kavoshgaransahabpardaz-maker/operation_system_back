@@ -9,7 +9,13 @@ from app.core.database import get_async_db
 from app.core.dependencies import get_current_user
 from app.models.activity_log import ActivityAction, ActivityLog
 from app.modules.field_extraction.models import ExtractedField, ExtractedFieldStatus
-from app.modules.field_extraction.schemas import ExtractedFieldOut, FieldCorrectRequest
+from app.modules.field_extraction.schemas import (
+    ExtractedFieldOut,
+    FieldCorrectRequest,
+    FieldMismatch,
+    MismatchValue,
+    ShipmentMismatchOut,
+)
 from app.modules.user_management.models import User
 
 router = APIRouter(tags=["Field Extraction"])
@@ -37,6 +43,42 @@ async def list_fields_for_document(
         select(ExtractedField).where(ExtractedField.document_id == document_id)
     )
     return list(result.scalars())
+
+
+@router.get("/shipments/{shipment_id}/field-mismatches", response_model=ShipmentMismatchOut)
+async def get_shipment_field_mismatches(
+    shipment_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Compare extracted field values across all documents in a shipment.
+    Returns fields where documents contradict each other.
+    severity=error means the discrepancy is customs-critical (weights, currency, HS code, value).
+    severity=warning means the discrepancy is notable but less critical.
+    """
+    from app.modules.field_extraction.service import detect_shipment_mismatches
+
+    raw_mismatches = await detect_shipment_mismatches(shipment_id, db)
+
+    mismatches = [
+        FieldMismatch(
+            field_name=m["field_name"],
+            severity=m["severity"],
+            values=[
+                MismatchValue(
+                    document_id=v["document_id"],
+                    value_raw=v["value_raw"],
+                    value_normalized=v["value_normalized"],
+                    confidence=v["confidence"],
+                )
+                for v in m["values"]
+            ],
+        )
+        for m in raw_mismatches
+    ]
+
+    return ShipmentMismatchOut(shipment_id=shipment_id, mismatches=mismatches)
 
 
 @router.post("/fields/{field_id}/confirm", response_model=ExtractedFieldOut)
