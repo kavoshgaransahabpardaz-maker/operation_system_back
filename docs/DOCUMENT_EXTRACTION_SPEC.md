@@ -4,6 +4,116 @@
 
 ---
 
+## 0. Migration Guide — What Changed
+
+This section tells the frontend developer exactly **what to update** versus the previous implementation. Each item is marked with the action required.
+
+### 0.1 File Upload — accept more formats
+
+**Before**: upload zone accepted only `PDF`, `JPG`, `PNG`.
+
+**Now**: also accept `WEBP`, `DOCX`, `XLSX`, `XLS`, `CSV`.
+
+**Change required**: update `<input accept="">` and client-side validation (see §10).
+
+---
+
+### 0.2 New `DocumentStatus` values
+
+**Before**: document could be `uploaded → processing → classified → matched / unmatched`.
+
+**Now**: the processing step is split into two statuses:
+
+| Old value | New value | Meaning |
+|---|---|---|
+| `processing` | `ocr_pending` | queued, not started yet |
+| `processing` | `ocr_processing` | actively running |
+| *(none)* | `ocr_failed` | extraction failed — show Retry |
+| *(none)* | `needs_review` | classified but confidence < 70% |
+
+**Change required**: if you were comparing `status === 'processing'`, replace with `status === 'ocr_pending' || status === 'ocr_processing'`. Add UI states for `ocr_failed` and `needs_review`.
+
+---
+
+### 0.3 Field extraction is now universal (not per-document-type)
+
+**Before**: only the fields relevant to the classified document type were returned. A Packing List returned packing-list fields; a Commercial Invoice returned invoice fields.
+
+**Now**: every document is scanned for **all 31 fields** (see §5). The extractor only returns fields it finds — but it looks for all of them regardless of document type.
+
+**Change required**: no schema change needed — `ExtractedField[]` shape is the same. But your UI must no longer filter or label fields based on document type. Show all returned fields.
+
+---
+
+### 0.4 New endpoint: Document Products  ← **add new tab/panel**
+
+**Before**: no product-line data was stored. Fields were the only extraction output.
+
+**Now**: after extraction, each document has a list of `DocumentProduct` rows — one per line item extracted from the document (e.g. each product on a commercial invoice).
+
+**New endpoints**:
+```
+GET /api/v1/documents/{document_id}/products   → DocumentProduct[]
+GET /api/v1/shipments/{shipment_id}/products   → DocumentProduct[]
+```
+
+**Change required**: add a **"Products" tab** to the Document Detail page and a products section to the Shipment Detail page (see §11, §12.2). These did not exist before.
+
+---
+
+### 0.5 New endpoint: Cross-document mismatch detection  ← **add banner**
+
+**Before**: no mismatch detection existed. Users had to compare documents manually.
+
+**Now**: a single on-demand call returns which fields disagree across documents in a shipment, with severity (`error` / `warning`).
+
+**New endpoint**:
+```
+GET /api/v1/shipments/{shipment_id}/field-mismatches   → ShipmentMismatchOut
+```
+
+**Change required**: add a **mismatch banner** at the top of the Shipment Detail Fields tab (see §12.1). Call this endpoint whenever the Fields tab is opened. Show nothing if `mismatches` array is empty.
+
+---
+
+### 0.6 Shipment auto-linking by invoice number  ← **handle new status**
+
+**Before**: documents were linked to shipments manually or by an explicit shipment_id passed at upload time.
+
+**Now**: if the extraction finds an `invoice_number`, the backend automatically finds or creates a shipment and sets `document.shipment_id`. The document status transitions to `matched`.
+
+**Change required**:
+- When polling detects `status === 'matched'` AND `shipment_id` is newly set, show a toast: *"Grouped into Shipment — view shipment"* with a link.
+- Do not assume `shipment_id` is null after upload; re-read it after polling completes.
+
+---
+
+### 0.7 Fields endpoint: `shipment_id` is now populated on fields
+
+**Before**: `ExtractedField.shipment_id` was typically `null` at extraction time.
+
+**Now**: after auto-linking, existing `ExtractedField` rows on that document are backfilled with the resolved `shipment_id`. Queries to `GET /shipments/{id}/fields` return all fields across all documents in the shipment.
+
+**Change required**: if you were reading fields only at document level, also call `GET /shipments/{id}/fields` on the Shipment Detail page to get the unified field view.
+
+---
+
+### 0.8 Summary checklist for the frontend developer
+
+| # | What to change | Where in this spec |
+|---|---|---|
+| 1 | Extend upload `accept` to include WEBP/DOCX/XLSX/CSV | §10 |
+| 2 | Handle `ocr_pending`, `ocr_processing`, `ocr_failed`, `needs_review` statuses | §2, §10 |
+| 3 | Remove document-type-based field filtering | §0.3 |
+| 4 | Add Products tab to Document Detail | §11 |
+| 5 | Add Products section to Shipment Detail | §12.2 |
+| 6 | Add Mismatch banner to Shipment Detail Fields tab | §12.1 |
+| 7 | On `status=matched`, show "Grouped into Shipment" toast | §0.6 |
+| 8 | On Shipment Detail, fetch `GET /shipments/{id}/fields` for unified view | §12.3 |
+| 9 | Add new query keys and invalidation rules | §8, §9 |
+
+---
+
 ## 1. Supported File Formats
 
 | Format | Extensions | MIME type |
