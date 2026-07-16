@@ -17,6 +17,7 @@ import app.modules.field_extraction.models  # noqa: F401
 import app.modules.flags.models  # noqa: F401
 import app.modules.org_settings.models  # noqa: F401
 import app.modules.intel.models  # noqa: F401
+import app.modules.classification_api.models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:

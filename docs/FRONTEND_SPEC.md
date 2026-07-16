@@ -1908,6 +1908,61 @@ shipmentMismatches: (id: string) => ['shipmentMismatches', id],
 
 ---
 
+#### Document Products (Classification API) — NEW
+
+Each uploaded document is sent to the external classification API which returns structured per-product data. These products are stored per-document and exposed via:
+
+```
+GET /api/v1/documents/{document_id}/products  → DocumentProduct[]
+GET /api/v1/shipments/{shipment_id}/products  → DocumentProduct[]  (all docs in shipment)
+```
+
+**`DocumentProduct` schema**:
+```typescript
+interface DocumentProduct {
+  id: string;
+  document_id: string;
+  shipment_id: string | null;
+  org_id: string;
+  product_name: string | null;
+  material: string | null;
+  intended_use: string | null;
+  description: string | null;
+  quantity: string | null;         // e.g. "1kg", "450gm"
+  unit_price: string | null;       // e.g. "5.20"
+  currency: string | null;         // ISO code, e.g. "GBP"
+  origin_country: string | null;   // ISO 2-letter, e.g. "BG"
+  destination_country: string | null;
+  existing_hs_code: string | null;
+  missing_required_fields: string[] | null;  // ["material", "intended_use"]
+  is_ready_to_classify: boolean;
+  created_at: string;
+}
+```
+
+**Shipment auto-linking** (backend behaviour): If the classification API returns `shipment.invoice_number`, the backend finds or creates a Shipment with that invoice reference and links the document to it automatically. Any other document with the same invoice number is attached to the same shipment.
+
+**API functions** (`src/api/fields.ts`):
+```typescript
+getDocumentProducts: (documentId: string) =>
+  api.get(`/documents/${documentId}/products`).then(r => r.data as DocumentProduct[]),
+getShipmentProducts: (shipmentId: string) =>
+  api.get(`/shipments/${shipmentId}/products`).then(r => r.data as DocumentProduct[]),
+```
+
+**Query keys**:
+```typescript
+documentProducts: (id: string) => ['documentProducts', id],
+shipmentProducts: (id: string) => ['shipmentProducts', id],
+```
+
+**UI placement** (Shipment Detail → new "Products" tab):
+- Table: Product Name | HS Code | Quantity | Unit Price | Currency | Origin → Destination | Ready?
+- `is_ready_to_classify=false` rows show an amber warning badge listing `missing_required_fields`
+- Source document shown as a chip (link to document detail)
+
+---
+
 **Universal extraction note** (behaviour change as of this version):
 Every uploaded document now attempts extraction of ALL fields from both Commercial Invoice and Packing List schemas, regardless of document type. The LLM only returns fields it actually finds — so a Bill of Lading will not produce invoice_value, but it will produce party_shipper, gross_weight, hs_code, etc. if those appear in the document. This means the extracted fields list on a shipment is richer, and cross-document mismatches are detected earlier.
 

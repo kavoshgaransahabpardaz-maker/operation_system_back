@@ -2,12 +2,14 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_async_db
 from app.core.dependencies import get_current_user
 from app.models.activity_log import ActivityAction, ActivityLog
+from app.modules.classification_api.models import DocumentProduct
 from app.modules.field_extraction.models import ExtractedField, ExtractedFieldStatus
 from app.modules.field_extraction.schemas import (
     ExtractedFieldOut,
@@ -17,6 +19,28 @@ from app.modules.field_extraction.schemas import (
     ShipmentMismatchOut,
 )
 from app.modules.user_management.models import User
+
+
+class DocumentProductOut(BaseModel):
+    id: uuid.UUID
+    document_id: uuid.UUID
+    shipment_id: uuid.UUID | None
+    org_id: uuid.UUID
+    product_name: str | None
+    material: str | None
+    intended_use: str | None
+    description: str | None
+    quantity: str | None
+    unit_price: str | None
+    currency: str | None
+    origin_country: str | None
+    destination_country: str | None
+    existing_hs_code: str | None
+    missing_required_fields: list | None
+    is_ready_to_classify: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 router = APIRouter(tags=["Field Extraction"])
 
@@ -29,6 +53,32 @@ async def list_fields_for_shipment(
 ):
     result = await db.execute(
         select(ExtractedField).where(ExtractedField.shipment_id == shipment_id)
+    )
+    return list(result.scalars())
+
+
+@router.get("/documents/{document_id}/products", response_model=list[DocumentProductOut])
+async def list_products_for_document(
+    document_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Return the product lines extracted by the classification API for a document."""
+    result = await db.execute(
+        select(DocumentProduct).where(DocumentProduct.document_id == document_id)
+    )
+    return list(result.scalars())
+
+
+@router.get("/shipments/{shipment_id}/products", response_model=list[DocumentProductOut])
+async def list_products_for_shipment(
+    shipment_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Return all product lines across all documents in a shipment."""
+    result = await db.execute(
+        select(DocumentProduct).where(DocumentProduct.shipment_id == shipment_id)
     )
     return list(result.scalars())
 
