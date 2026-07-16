@@ -1,6 +1,6 @@
 """Add document_products table for classification API results
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: 3dfa2c7a2a98
 Revises: f2a3b4c5d6e7
 Create Date: 2026-07-16
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "a1b2c3d4e5f6"
+revision: str = "3dfa2c7a2a98"
 down_revision: Union[str, None] = "f2a3b4c5d6e7"
 branch_labels = None
 depends_on = None
