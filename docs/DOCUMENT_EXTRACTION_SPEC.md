@@ -1,116 +1,28 @@
 # Document Upload & Extraction — Frontend Spec
 
-> **Purpose**: This document describes everything the frontend needs to rewrite the document upload, processing, and field extraction flow. It supersedes any earlier document-upload or field-extraction sections in `FRONTEND_SPEC.md`.
+> **Purpose**: Complete guide for the frontend to implement the document/shipment flow. Supersedes any earlier document-upload or field-extraction sections in `FRONTEND_SPEC.md`.
 
 ---
 
-## 0. Migration Guide — What Changed
+## 0. High-Level Flow
 
-This section tells the frontend developer exactly **what to update** versus the previous implementation. Each item is marked with the action required.
+The new flow is **shipment-first**. The user creates a shipment before uploading documents.
 
-### 0.1 File Upload — accept more formats
-
-**Before**: upload zone accepted only `PDF`, `JPG`, `PNG`.
-
-**Now**: also accept `WEBP`, `DOCX`, `XLSX`, `XLS`, `CSV`.
-
-**Change required**: update `<input accept="">` and client-side validation (see §10).
-
----
-
-### 0.2 New `DocumentStatus` values
-
-**Before**: document could be `uploaded → processing → classified → matched / unmatched`.
-
-**Now**: the processing step is split into two statuses:
-
-| Old value | New value | Meaning |
-|---|---|---|
-| `processing` | `ocr_pending` | queued, not started yet |
-| `processing` | `ocr_processing` | actively running |
-| *(none)* | `ocr_failed` | extraction failed — show Retry |
-| *(none)* | `needs_review` | classified but confidence < 70% |
-
-**Change required**: if you were comparing `status === 'processing'`, replace with `status === 'ocr_pending' || status === 'ocr_processing'`. Add UI states for `ocr_failed` and `needs_review`.
-
----
-
-### 0.3 Field extraction is now universal (not per-document-type)
-
-**Before**: only the fields relevant to the classified document type were returned. A Packing List returned packing-list fields; a Commercial Invoice returned invoice fields.
-
-**Now**: every document is scanned for **all 31 fields** (see §5). The extractor only returns fields it finds — but it looks for all of them regardless of document type.
-
-**Change required**: no schema change needed — `ExtractedField[]` shape is the same. But your UI must no longer filter or label fields based on document type. Show all returned fields.
-
----
-
-### 0.4 New endpoint: Document Products  ← **add new tab/panel**
-
-**Before**: no product-line data was stored. Fields were the only extraction output.
-
-**Now**: after extraction, each document has a list of `DocumentProduct` rows — one per line item extracted from the document (e.g. each product on a commercial invoice).
-
-**New endpoints**:
 ```
-GET /api/v1/documents/{document_id}/products   → DocumentProduct[]
-GET /api/v1/shipments/{shipment_id}/products   → DocumentProduct[]
+1. User creates shipment (enters invoice number)
+        ↓
+2. User uploads one or more documents to that shipment
+        ↓
+3. System OCRs + classifies each document
+   • High confidence → doc_type set automatically
+   • Low confidence  → frontend shows type picker, user selects
+        ↓
+4. System extracts fields + products per document
+        ↓
+5. User reviews & confirms extracted fields per document
+        ↓
+6. Mismatch banner appears (only when ≥ 2 documents with same fields disagree)
 ```
-
-**Change required**: add a **"Products" tab** to the Document Detail page and a products section to the Shipment Detail page (see §11, §12.2). These did not exist before.
-
----
-
-### 0.5 New endpoint: Cross-document mismatch detection  ← **add banner**
-
-**Before**: no mismatch detection existed. Users had to compare documents manually.
-
-**Now**: a single on-demand call returns which fields disagree across documents in a shipment, with severity (`error` / `warning`).
-
-**New endpoint**:
-```
-GET /api/v1/shipments/{shipment_id}/field-mismatches   → ShipmentMismatchOut
-```
-
-**Change required**: add a **mismatch banner** at the top of the Shipment Detail Fields tab (see §12.1). Call this endpoint whenever the Fields tab is opened. Show nothing if `mismatches` array is empty.
-
----
-
-### 0.6 Shipment auto-linking by invoice number  ← **handle new status**
-
-**Before**: documents were linked to shipments manually or by an explicit shipment_id passed at upload time.
-
-**Now**: if the extraction finds an `invoice_number`, the backend automatically finds or creates a shipment and sets `document.shipment_id`. The document status transitions to `matched`.
-
-**Change required**:
-- When polling detects `status === 'matched'` AND `shipment_id` is newly set, show a toast: *"Grouped into Shipment — view shipment"* with a link.
-- Do not assume `shipment_id` is null after upload; re-read it after polling completes.
-
----
-
-### 0.7 Fields endpoint: `shipment_id` is now populated on fields
-
-**Before**: `ExtractedField.shipment_id` was typically `null` at extraction time.
-
-**Now**: after auto-linking, existing `ExtractedField` rows on that document are backfilled with the resolved `shipment_id`. Queries to `GET /shipments/{id}/fields` return all fields across all documents in the shipment.
-
-**Change required**: if you were reading fields only at document level, also call `GET /shipments/{id}/fields` on the Shipment Detail page to get the unified field view.
-
----
-
-### 0.8 Summary checklist for the frontend developer
-
-| # | What to change | Where in this spec |
-|---|---|---|
-| 1 | Extend upload `accept` to include WEBP/DOCX/XLSX/CSV | §10 |
-| 2 | Handle `ocr_pending`, `ocr_processing`, `ocr_failed`, `needs_review` statuses | §2, §10 |
-| 3 | Remove document-type-based field filtering | §0.3 |
-| 4 | Add Products tab to Document Detail | §11 |
-| 5 | Add Products section to Shipment Detail | §12.2 |
-| 6 | Add Mismatch banner to Shipment Detail Fields tab | §12.1 |
-| 7 | On `status=matched`, show "Grouped into Shipment" toast | §0.6 |
-| 8 | On Shipment Detail, fetch `GET /shipments/{id}/fields` for unified view | §12.3 |
-| 9 | Add new query keys and invalidation rules | §8, §9 |
 
 ---
 
@@ -127,34 +39,44 @@ GET /api/v1/shipments/{shipment_id}/field-mismatches   → ShipmentMismatchOut
 | CSV | `.csv` | `text/csv` |
 | Old Excel | `.xls` | `application/vnd.ms-excel` |
 
-Max file size: **1 GB per file**. Max batch: **15 files**.
+Max file size: **1 GB**. Max batch: **15 files**.
 
 ---
 
-## 2. Document Status Flow
+## 2. Document Types (for manual selection picker)
 
-```
-UPLOADED
-  └─► OCR_PENDING / OCR_PROCESSING
-        └─► CLASSIFIED
-              └─► MATCHED          (document auto-linked to a shipment)
-              └─► UNMATCHED        (no shipment found)
-              └─► NEEDS_REVIEW     (classification confidence < 70%)
-```
+When the system cannot classify a document with confidence ≥ 70%, the frontend must show a picker. These are the 8 types the user can choose from:
 
-After upload, poll `GET /api/v1/documents/{id}` every 3 seconds until `status` is no longer `uploaded` or `ocr_pending`. Once `classified` or `matched`, the fields and products are ready.
+| `doc_type` value | Display label |
+|---|---|
+| `commercial_invoice` | Commercial Invoice |
+| `packing_list` | Packing List |
+| `bill_of_material` | Bill of Material |
+| `bill_of_lading` | Bill of Lading |
+| `certificate_of_origin` | Certificate of Origin |
+| `phytosanitary_certificate` | Phytosanitary Certificate |
+| `product_specification` | Product Specification |
+| `air_waybill` | Airway Bill |
 
 ---
 
 ## 3. TypeScript Types
 
 ```typescript
-// ── Document ──────────────────────────────────────────────────────────────────
+// ── Document types ────────────────────────────────────────────────────────────
 type DocumentStatus =
   | 'uploaded' | 'ocr_pending' | 'ocr_processing' | 'ocr_failed'
   | 'classified' | 'matched' | 'unmatched' | 'needs_review';
 
 type DocumentSource = 'upload' | 'email';
+
+type DocType =
+  | 'commercial_invoice' | 'packing_list' | 'bill_of_material'
+  | 'bill_of_lading' | 'certificate_of_origin' | 'phytosanitary_certificate'
+  | 'product_specification' | 'air_waybill'
+  | 'insurance_certificate' | 'customs_declaration' | 'purchase_order'
+  | 'delivery_order' | 'mill_certificate' | 'suppliers_declaration'
+  | 'cmr' | 'other';
 
 interface DocumentOut {
   id: string;
@@ -171,7 +93,39 @@ interface DocumentOut {
   download_url?: string;       // only on GET /documents/{id}
 }
 
-// ── Extracted Field ───────────────────────────────────────────────────────────
+// ── Shipment types ────────────────────────────────────────────────────────────
+type ShipmentStatus = 'active' | 'on_hold' | 'complete';
+type ReferenceType = 'invoice' | 'bl' | 'awb' | 'po' | 'container' | 'internal';
+
+interface ShipmentReference {
+  id: string;
+  ref_type: ReferenceType;
+  ref_value: string;
+}
+
+interface DocumentSummary {
+  id: string;
+  filename: string;
+  status: DocumentStatus;
+  doc_type: DocType | null;
+  doc_type_confidence: number | null;   // 0.0–1.0
+  is_manual_override: boolean | null;
+  field_count: number;
+  confirmed_field_count: number;
+  product_count: number;
+}
+
+interface ShipmentDetail {
+  id: string;
+  org_id: string;
+  status: ShipmentStatus;
+  created_at: string;
+  updated_at: string;
+  references: ShipmentReference[];
+  documents: DocumentSummary[];
+}
+
+// ── Field types ───────────────────────────────────────────────────────────────
 type ExtractedFieldStatus = 'extracted' | 'confirmed' | 'corrected';
 type FieldType = 'string' | 'decimal' | 'date' | 'iso_code';
 
@@ -180,11 +134,11 @@ interface ExtractedField {
   document_id: string;
   shipment_id: string | null;
   org_id: string | null;
-  field_name: string;          // see Field Name Reference below
-  value_raw: string;           // exact text from the document
-  value_normalized: string | null; // ISO-formatted / canonical value
+  field_name: string;
+  value_raw: string;
+  value_normalized: string | null;
   field_type: FieldType | null;
-  confidence: number;          // 0.0 – 1.0
+  confidence: number;
   page_number: number | null;
   status: ExtractedFieldStatus;
   confirmed_at: string | null;
@@ -195,7 +149,7 @@ interface ExtractedField {
   created_at: string;
 }
 
-// ── Document Product ──────────────────────────────────────────────────────────
+// ── Product types ─────────────────────────────────────────────────────────────
 interface DocumentProduct {
   id: string;
   document_id: string;
@@ -205,18 +159,18 @@ interface DocumentProduct {
   material: string | null;
   intended_use: string | null;
   description: string | null;
-  quantity: string | null;          // e.g. "1kg", "450gm", "12 pcs"
-  unit_price: string | null;        // numeric string, e.g. "5.20"
-  currency: string | null;          // ISO 4217, e.g. "GBP"
-  origin_country: string | null;    // ISO 3166-1 alpha-2, e.g. "BG"
+  quantity: string | null;
+  unit_price: string | null;
+  currency: string | null;
+  origin_country: string | null;
   destination_country: string | null;
-  existing_hs_code: string | null;  // 6–10 digit commodity code
-  missing_required_fields: string[] | null; // ["material", "intended_use"]
+  existing_hs_code: string | null;
+  missing_required_fields: string[] | null;
   is_ready_to_classify: boolean;
   created_at: string;
 }
 
-// ── Mismatch ──────────────────────────────────────────────────────────────────
+// ── Mismatch types ────────────────────────────────────────────────────────────
 interface MismatchValue {
   document_id: string;
   value_raw: string;
@@ -227,7 +181,7 @@ interface MismatchValue {
 interface FieldMismatch {
   field_name: string;
   severity: 'error' | 'warning';
-  values: MismatchValue[];    // one per document that has this field
+  values: MismatchValue[];
 }
 
 interface ShipmentMismatchOut {
@@ -240,25 +194,71 @@ interface ShipmentMismatchOut {
 
 ## 4. API Reference
 
-All endpoints are prefixed with `/api/v1`. Auth: `Authorization: Bearer <token>` header required on every call.
+All endpoints are prefixed with `/api/v1`. Auth: `Authorization: Bearer <token>` on every call.
 
-### 4.1 Upload
+### 4.1 Shipments
 
-#### Single upload
+#### Create shipment  ← **NEW**
+```
+POST /api/v1/shipments/
+Content-Type: application/json
+
+{ "invoice_number": "INV-2026-001" }
+```
+**Response**: `201 ShipmentDetail` (with empty `documents` array)
+
+**Errors**:
+- `409` — a shipment with that invoice number already exists in the org
+- `422` — invoice_number is blank
+
+#### List shipments
+```
+GET /api/v1/shipments/
+```
+**Response**: `200 ShipmentOut[]` (lightweight, no document list)
+
+#### Get shipment detail  ← **updated response**
+```
+GET /api/v1/shipments/{shipment_id}
+```
+**Response**: `200 ShipmentDetail` — includes `documents[]` with per-document field/product counts
+
+#### Update shipment status
+```
+PATCH /api/v1/shipments/{shipment_id}
+Body: { "status": "active" | "on_hold" | "complete" }
+```
+**Response**: `200 ShipmentOut`
+
+#### Delete shipment
+```
+DELETE /api/v1/shipments/{shipment_id}
+```
+**Response**: `204`
+
+---
+
+### 4.2 Document Upload
+
+#### Single upload  ← **updated: accepts shipment_id**
 ```
 POST /api/v1/documents/upload
 Content-Type: multipart/form-data
 
-Field: file  (binary)
+Field: file        (binary, required)
+Field: shipment_id (UUID string, optional)
 ```
 **Response**: `201 DocumentOut`
 
-#### Batch upload (up to 15 files)
+When `shipment_id` is provided, the document is immediately linked to that shipment. OCR + extraction still run automatically.
+
+#### Batch upload  ← **updated: accepts shipment_id**
 ```
 POST /api/v1/documents/upload/batch
 Content-Type: multipart/form-data
 
-Field: files[]  (binary, repeated)
+Field: files[]     (binary, repeated, required)
+Field: shipment_id (UUID string, optional — applies to ALL files in batch)
 ```
 **Response**: `201 DocumentOut[]`
 
@@ -269,13 +269,13 @@ Field: files[]  (binary, repeated)
 
 ---
 
-### 4.2 Document Queries
+### 4.3 Document Queries
 
-#### Get single document + download URL
+#### Get single document + presigned download URL
 ```
 GET /api/v1/documents/{document_id}
 ```
-**Response**: `200 DocumentOut` (includes `download_url`, 1-hour presigned S3 URL)
+**Response**: `200 DocumentOut` (includes `download_url`, valid 1 hour)
 
 #### List documents (optionally scoped to shipment)
 ```
@@ -291,9 +291,37 @@ DELETE /api/v1/documents/{document_id}
 
 ---
 
-### 4.3 Extracted Fields
+### 4.4 Document Type Classification
 
-Fields are extracted automatically after a document is classified. Every document type is scanned for all fields below — the extractor only returns what it finds.
+#### Get classification for a document
+```
+GET /api/v1/classifications/{document_id}
+```
+**Response**:
+```json
+{
+  "id": "...",
+  "document_id": "...",
+  "doc_type": "commercial_invoice",
+  "confidence": 0.92,
+  "is_manual_override": false,
+  "classified_by": null,
+  "classified_at": "2026-07-16T10:00:00Z"
+}
+```
+
+#### Override / set document type manually (user selection)
+```
+POST /api/v1/classifications/{document_id}/override
+Body: { "doc_type": "bill_of_material" }
+```
+**Response**: `200 ClassificationOut`
+
+After override, the pipeline re-runs shipment matching automatically.
+
+---
+
+### 4.5 Extracted Fields
 
 #### Fields for one document
 ```
@@ -301,30 +329,38 @@ GET /api/v1/documents/{document_id}/fields
 ```
 **Response**: `200 ExtractedField[]`
 
-#### Fields for a shipment (all documents)
+#### Fields for a shipment (all documents merged)
 ```
 GET /api/v1/shipments/{shipment_id}/fields
 ```
 **Response**: `200 ExtractedField[]`
 
-#### Confirm a field (user validates the extracted value)
+#### Confirm a field
 ```
 POST /api/v1/fields/{field_id}/confirm
 ```
 **Response**: `200 ExtractedField`
 
-#### Correct a field (user provides a corrected value)
+#### Correct a field
 ```
 POST /api/v1/fields/{field_id}/correct
 Body: { "corrected_value": "string" }
 ```
 **Response**: `200 ExtractedField`
 
+#### Confirm all fields for a shipment  ← **NEW**
+```
+POST /api/v1/shipments/{shipment_id}/fields/confirm-all
+```
+Optional query param: `?document_id={uuid}` to confirm only one document's fields.
+
+**Response**: `200 { "confirmed": 12 }`
+
+Skips fields already in `confirmed` or `corrected` status.
+
 ---
 
-### 4.4 Document Products
-
-Structured per-product lines extracted by the classification API.
+### 4.6 Document Products
 
 #### Products for one document
 ```
@@ -340,9 +376,9 @@ GET /api/v1/shipments/{shipment_id}/products
 
 ---
 
-### 4.5 Cross-Document Mismatch Detection
+### 4.7 Cross-Document Mismatch Detection
 
-Compares field values across all documents in a shipment. Computed on-demand — not stored.
+Compares field values across all documents in a shipment. Returns empty list when fewer than 2 documents share the same field.
 
 ```
 GET /api/v1/shipments/{shipment_id}/field-mismatches
@@ -363,78 +399,84 @@ GET /api/v1/shipments/{shipment_id}/field-mismatches
 | `party_shipper` | warning |
 | `party_consignee` | warning |
 
-**Comparison rules**:
-- Decimal fields: compare numeric values (units stripped). Exact equality.
-- ISO codes: case-insensitive exact match.
-- String fields: case-insensitive, whitespace-trimmed.
-
 ---
 
 ## 5. Field Name Reference
 
-All `field_name` values used in `ExtractedField.field_name`:
+All `field_name` values in `ExtractedField.field_name`:
 
-| field_name | Display label | Type | Notes |
-|---|---|---|---|
-| `party_shipper` | Seller / Consignor | string | Full name + address |
-| `vat_number_seller` | Seller VAT / EIK | string | EU VAT, EIK (Bulgaria), etc. |
-| `rex_number_seller` | Seller REX Number | string | e.g. `REX BG123456789` |
-| `party_consignee` | Buyer / Consignee | string | Full name + address |
-| `vat_number_buyer` | Buyer VAT Number | string | |
-| `rex_number_buyer` | Buyer REX Number | string | |
-| `eori_number` | EORI Number | string | 2-letter country + up to 15 alphanum |
-| `invoice_value` | Invoice Value | decimal | Exclude VAT |
-| `vat_value` | VAT Amount | decimal | Tax amount separately |
-| `freight_value` | Freight Value | decimal | |
-| `insurance_value` | Insurance Value | decimal | |
-| `currency` | Currency | iso_code | ISO 4217 |
-| `gross_weight` | Gross Weight | decimal | Includes unit in `value_raw` e.g. `830 kg` |
-| `net_weight` | Net Weight | decimal | |
-| `quantity` | Quantity | decimal | |
-| `total_packages` | Total Packages | decimal | |
-| `hs_code` | HS / Commodity Code | string | 6–10 digits |
-| `commodity_description` | Product Description | string | |
-| `lot_number` | Lot Number | string | |
-| `product_registration_number` | Product Reg. No. | string | |
-| `product_serial_number` | Serial Number | string | |
-| `stated_origin` | Country of Origin | iso_code | ISO 3166-1 alpha-2 |
-| `destination_country` | Destination Country | iso_code | |
-| `place_of_loading` | Place of Loading | string | |
-| `incoterm` | Incoterm | iso_code | Incoterms 2020 |
-| `preferential_duty` | Preferential Duty | string | Full self-certification statement |
-| `invoice_date` | Invoice Date | date | ISO 8601 in `value_normalized` |
-| `due_date` | Payment Due Date | date | |
-| `shipment_date` | Shipment Date | date | |
-| `expiry_date` | Expiry Date | date | |
-| `reference` | Reference / Invoice No. | string | May contain multiple refs separated by `;` |
-| `local_reference` | Local Reference | string | |
-| `point_of_entry` | Point of Entry | string | |
+| field_name | Display label | Type |
+|---|---|---|
+| `party_shipper` | Seller / Consignor | string |
+| `vat_number_seller` | Seller VAT / EIK | string |
+| `rex_number_seller` | Seller REX Number | string |
+| `party_consignee` | Buyer / Consignee | string |
+| `vat_number_buyer` | Buyer VAT Number | string |
+| `rex_number_buyer` | Buyer REX Number | string |
+| `eori_number` | EORI Number | string |
+| `invoice_value` | Invoice Value | decimal |
+| `vat_value` | VAT Amount | decimal |
+| `freight_value` | Freight Value | decimal |
+| `insurance_value` | Insurance Value | decimal |
+| `currency` | Currency | iso_code |
+| `gross_weight` | Gross Weight | decimal |
+| `net_weight` | Net Weight | decimal |
+| `quantity` | Quantity | decimal |
+| `total_packages` | Total Packages | decimal |
+| `hs_code` | HS / Commodity Code | string |
+| `commodity_description` | Product Description | string |
+| `lot_number` | Lot Number | string |
+| `product_registration_number` | Product Reg. No. | string |
+| `product_serial_number` | Serial Number | string |
+| `stated_origin` | Country of Origin | iso_code |
+| `destination_country` | Destination Country | iso_code |
+| `place_of_loading` | Place of Loading | string |
+| `incoterm` | Incoterm | iso_code |
+| `preferential_duty` | Preferential Duty | string |
+| `invoice_date` | Invoice Date | date |
+| `due_date` | Payment Due Date | date |
+| `shipment_date` | Shipment Date | date |
+| `expiry_date` | Expiry Date | date |
+| `reference` | Reference / Invoice No. | string |
+| `local_reference` | Local Reference | string |
+| `point_of_entry` | Point of Entry | string |
 
 **Display rules**:
-- For `decimal` fields: show `value_normalized` (pure number) + append currency / unit where relevant.
-- For `date` fields: show `value_normalized` (YYYY-MM-DD) formatted to locale.
-- For `iso_code` fields: show flag + code (e.g. 🇬🇧 GBP).
-- For `preferential_duty`: render as a highlighted info box with the full statement text.
-- For `eori_number`, `vat_number_*`, `rex_number_*`: monospace pill.
-- Confidence < 0.70: show amber badge ("Low confidence").
-- `status = 'corrected'`: display `corrected_value`, strike through `value_raw`.
+- `decimal`: show `value_normalized` (pure number); append unit/currency label.
+- `date`: show `value_normalized` (YYYY-MM-DD) formatted to locale.
+- `iso_code`: show flag + code (e.g. 🇬🇧 GBP).
+- `preferential_duty`: highlighted info box with full statement text.
+- `eori_number`, `vat_number_*`, `rex_number_*`: monospace pill.
+- Confidence < 0.70: amber badge "Low confidence".
+- `status = 'corrected'`: show `corrected_value`, strike through `value_raw`.
 
 ---
 
-## 6. Shipment Auto-Linking by Invoice Number
+## 6. API Functions (`src/api/`)
 
-When the classification API returns `shipment.invoice_number`, the backend:
-1. Searches for an existing shipment with that invoice reference in the org.
-2. If found → links the document to that shipment.
-3. If not found → creates a new shipment and records the invoice reference.
+### `src/api/shipments.ts`
 
-**Result**: multiple documents sharing the same `invoice_number` (e.g. a commercial invoice and a packing list) are automatically grouped into one shipment — no manual linking needed.
+```typescript
+import { api } from './client';
+import type { ShipmentDetail, ShipmentOut } from '../types';
 
-The document's `shipment_id` is updated after extraction completes. If you poll `GET /documents/{id}` and see a non-null `shipment_id`, the grouping has happened.
+export const shipmentsApi = {
+  create: (invoiceNumber: string) =>
+    api.post<ShipmentDetail>('/shipments/', { invoice_number: invoiceNumber }).then(r => r.data),
 
----
+  list: () =>
+    api.get<ShipmentOut[]>('/shipments/').then(r => r.data),
 
-## 7. API Functions (`src/api/`)
+  get: (shipmentId: string) =>
+    api.get<ShipmentDetail>(`/shipments/${shipmentId}`).then(r => r.data),
+
+  updateStatus: (shipmentId: string, status: string) =>
+    api.patch<ShipmentOut>(`/shipments/${shipmentId}`, { status }).then(r => r.data),
+
+  delete: (shipmentId: string) =>
+    api.delete(`/shipments/${shipmentId}`),
+};
+```
 
 ### `src/api/documents.ts`
 
@@ -443,15 +485,17 @@ import { api } from './client';
 import type { DocumentOut } from '../types';
 
 export const documentsApi = {
-  upload: (file: File) => {
+  upload: (file: File, shipmentId?: string) => {
     const form = new FormData();
     form.append('file', file);
+    if (shipmentId) form.append('shipment_id', shipmentId);
     return api.post<DocumentOut>('/documents/upload', form).then(r => r.data);
   },
 
-  uploadBatch: (files: File[]) => {
+  uploadBatch: (files: File[], shipmentId?: string) => {
     const form = new FormData();
     files.forEach(f => form.append('files', f));
+    if (shipmentId) form.append('shipment_id', shipmentId);
     return api.post<DocumentOut[]>('/documents/upload/batch', form).then(r => r.data);
   },
 
@@ -474,7 +518,6 @@ import { api } from './client';
 import type { ExtractedField, DocumentProduct, ShipmentMismatchOut } from '../types';
 
 export const fieldsApi = {
-  // Extracted fields
   getForDocument: (documentId: string) =>
     api.get<ExtractedField[]>(`/documents/${documentId}/fields`).then(r => r.data),
 
@@ -488,74 +531,231 @@ export const fieldsApi = {
     api.post<ExtractedField>(`/fields/${fieldId}/correct`, { corrected_value: correctedValue })
        .then(r => r.data),
 
-  // Products
+  confirmAll: (shipmentId: string, documentId?: string) =>
+    api.post<{ confirmed: number }>(
+      `/shipments/${shipmentId}/fields/confirm-all`,
+      {},
+      { params: documentId ? { document_id: documentId } : {} }
+    ).then(r => r.data),
+
   getProductsForDocument: (documentId: string) =>
     api.get<DocumentProduct[]>(`/documents/${documentId}/products`).then(r => r.data),
 
   getProductsForShipment: (shipmentId: string) =>
     api.get<DocumentProduct[]>(`/shipments/${shipmentId}/products`).then(r => r.data),
 
-  // Mismatches
   getMismatches: (shipmentId: string) =>
     api.get<ShipmentMismatchOut>(`/shipments/${shipmentId}/field-mismatches`).then(r => r.data),
 };
 ```
 
+### `src/api/classifications.ts`
+
+```typescript
+import { api } from './client';
+
+interface ClassificationOut {
+  id: string;
+  document_id: string;
+  doc_type: string;
+  confidence: number;
+  is_manual_override: boolean;
+  classified_by: string | null;
+  classified_at: string;
+}
+
+export const classificationsApi = {
+  get: (documentId: string) =>
+    api.get<ClassificationOut>(`/classifications/${documentId}`).then(r => r.data),
+
+  override: (documentId: string, docType: string) =>
+    api.post<ClassificationOut>(`/classifications/${documentId}/override`, { doc_type: docType })
+       .then(r => r.data),
+};
+```
+
 ---
 
-## 8. Query Keys (`src/api/queryKeys.ts`)
-
-Add or replace:
+## 7. Query Keys
 
 ```typescript
 export const queryKeys = {
-  // ... existing keys ...
+  shipmentList: () => ['shipments'] as const,
+  shipment: (id: string) => ['shipment', id] as const,
 
-  document: (id: string) => ['document', id] as const,
   documentList: (shipmentId?: string) => ['documents', shipmentId] as const,
+  document: (id: string) => ['document', id] as const,
+
+  classification: (documentId: string) => ['classification', documentId] as const,
+
   documentFields: (documentId: string) => ['fields', 'document', documentId] as const,
-  documentProducts: (documentId: string) => ['products', 'document', documentId] as const,
   shipmentFields: (shipmentId: string) => ['fields', 'shipment', shipmentId] as const,
+
+  documentProducts: (documentId: string) => ['products', 'document', documentId] as const,
   shipmentProducts: (shipmentId: string) => ['products', 'shipment', shipmentId] as const,
+
   shipmentMismatches: (shipmentId: string) => ['mismatches', shipmentId] as const,
 };
 ```
 
 ---
 
-## 9. Query Invalidation Rules
+## 8. Query Invalidation Rules
 
 | Event | Invalidate |
 |---|---|
-| Document uploaded | `documentList` |
-| Document polled → status changed | `document(id)`, `shipmentFields(shipmentId)`, `shipmentProducts(shipmentId)`, `shipmentMismatches(shipmentId)` |
-| Field confirmed | `documentFields(documentId)`, `shipmentFields(shipmentId)`, `shipmentMismatches(shipmentId)` |
-| Field corrected | same as confirmed |
-| Document deleted | `documentList`, `shipmentFields`, `shipmentProducts`, `shipmentMismatches` |
+| Shipment created | `shipmentList` |
+| Shipment status changed | `shipment(id)` |
+| Document uploaded | `shipment(shipmentId)`, `documentList(shipmentId)` |
+| Document polling → status changed | `document(id)`, `shipment(shipmentId)` |
+| Document type overridden | `classification(documentId)`, `shipment(shipmentId)` |
+| Field confirmed / corrected | `documentFields(documentId)`, `shipmentFields(shipmentId)`, `shipmentMismatches(shipmentId)`, `shipment(shipmentId)` |
+| confirm-all | same as field confirmed |
+| Document deleted | `documentList`, `shipment(shipmentId)`, `shipmentFields`, `shipmentProducts`, `shipmentMismatches` |
 
 ---
 
-## 10. Upload Zone Component
+## 9. Page Designs
 
-### Accepted formats (for `<input accept="">`)
+### 9.1 Create Shipment Dialog / Page
+
+A simple form with one input:
+
+```
+Invoice Number *  [ INV-2026-001        ]
+                  [ Create Shipment     ]
+```
+
+On submit: call `POST /shipments/`. On success navigate to Shipment Detail page.
+
+Error case: `409` → show inline error "A shipment with this invoice number already exists."
+
+---
+
+### 9.2 Shipment Detail Page
+
+**Header**: Invoice reference chip, status badge (`active` / `on_hold` / `complete`), created date, Edit Status dropdown.
+
+**Mismatch Banner** (shown only when `mismatches.length > 0`):
+```
+┌──────────────────────────────────────────────────────────┐
+│ ⚠ 2 field conflicts detected                             │
+│                                                          │
+│ [error]   gross_weight                                   │
+│   • invoicem_123.pdf : 830 kg                            │
+│   • pl_456.pdf       : 792 kg                            │
+│                                                          │
+│ [warning] party_consignee                                │
+│   • invoicem_123.pdf : SAN WOJ                           │
+│   • pl_456.pdf       : San Woj Ltd                       │
+└──────────────────────────────────────────────────────────┘
+```
+- Only call `GET /shipments/{id}/field-mismatches` when `documents.length >= 2`.
+- `severity=error` → red border + `AlertOctagon` icon.
+- `severity=warning` → amber border + `AlertTriangle` icon.
+
+**Document List** (source: `ShipmentDetail.documents`):
+
+Each row in the list:
+| Column | Source |
+|---|---|
+| Filename + type icon | `filename`, `content_type` |
+| Document type badge | `doc_type` (see §2 display labels) |
+| Confidence | `doc_type_confidence` as % — amber if < 70% |
+| Status badge | `status` |
+| Fields | `confirmed_field_count` / `field_count` (e.g. "8 / 12") |
+| Products | `product_count` |
+| Actions | View, Delete |
+
+**Type picker (shown when `status === 'needs_review'` or `doc_type === null`):**
+
+```
+What type is this document?
+[ Commercial Invoice ] [ Packing List ] [ Bill of Material ]
+[ Bill of Lading    ] [ Cert. Origin ] [ Phytosanitary    ]
+[ Product Spec      ] [ Airway Bill  ]
+```
+
+On selection: call `POST /classifications/{documentId}/override`. Invalidate `classification(documentId)` and `shipment(shipmentId)`.
+
+**Upload Zone** (always visible at the bottom of the document list):
+
+```
+[ Drop files here or click to browse ]
+PDF  JPG  PNG  WEBP  DOCX  XLSX  CSV
+```
+
+Uploaded files are immediately linked to the current shipment (pass `shipment_id` in the form).
+
+---
+
+### 9.3 Document Detail Page
+
+**Header**: Filename, type badge, status badge, uploaded date, Download button.
+
+**Tab: Products** (source: `GET /documents/{id}/products`)
+
+Table:
+| Product Name | HS Code | Qty | Unit Price | Origin → Dest | Ready? |
+|---|---|---|---|---|---|
+| Eco Bag | 6305.33 | 1kg | 5.20 GBP | 🇧🇬 BG → 🇬🇧 GB | ✅ |
+| (no name) | — | — | — | — | ⚠ Missing: material |
+
+**Tab: Fields** (source: `GET /documents/{id}/fields`)
+
+Grouped by field_name. For each field row:
+- Display label
+- `value_normalized ?? value_raw`
+- Confidence badge (green ≥ 0.85, amber 0.70–0.84, red < 0.70)
+- Status badge (`extracted` / `confirmed` / `corrected`)
+- Confirm button (if `status === 'extracted'`)
+- Correct button (opens inline text input)
+
+"Confirm All" button at top right → calls `POST /shipments/{id}/fields/confirm-all?document_id={id}`.
+
+Progress indicator: `8 / 12 fields confirmed`.
+
+Corrected fields: show `corrected_value` in green, strike through `value_raw`.
+
+---
+
+## 10. Upload Component
+
+### `<input accept="">` string
 ```
 .pdf,.jpg,.jpeg,.png,.webp,.docx,.xls,.xlsx,.csv
 ```
-Or by MIME type:
+
+### Upload flow (when inside Shipment Detail)
+
 ```
-application/pdf,image/jpeg,image/png,image/webp,
-application/vnd.openxmlformats-officedocument.wordprocessingml.document,
-application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,
-application/vnd.ms-excel,text/csv
+User drops / selects file(s)
+  ↓
+Client validates: extension, size < 1 GB
+  ↓
+POST /documents/upload (or /upload/batch) with shipment_id in form
+  ↓
+Show per-file uploading spinner
+  ↓
+On 201 → invalidate shipment(id), documentList(shipmentId)
+  ↓
+Begin polling GET /documents/{id} every 3s
+  ↓
+Poll until status ∉ ['uploaded', 'ocr_pending', 'ocr_processing']
+  ↓
+status === 'needs_review' → show type picker for that document
+status === 'classified' / 'matched' → show success, refresh shipment
+status === 'ocr_failed' → show error "Could not read file. Try again."
+  ↓
+Stop polling after 10 minutes → show "Processing timed out"
 ```
 
-### File icon mapping (for document list)
+### File icon mapping
+
 ```typescript
 const FILE_ICONS: Record<string, string> = {
   'application/pdf': 'FileText',
-  'image/jpeg': 'Image',
-  'image/png': 'Image',
-  'image/webp': 'Image',
+  'image/jpeg': 'Image', 'image/png': 'Image', 'image/webp': 'Image',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'FileType',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'Table',
   'application/vnd.ms-excel': 'Table',
@@ -563,115 +763,37 @@ const FILE_ICONS: Record<string, string> = {
 };
 ```
 
-### Upload flow
+---
 
-```
-User drops / selects file(s)
-  ↓
-Validate client-side: extension, size < 1 GB
-  ↓
-POST /documents/upload (single) or /documents/upload/batch
-  ↓
-Show uploading spinner per file
-  ↓
-On 201 → begin polling GET /documents/{id} every 3s
-  ↓
-Poll until status ∉ ['uploaded', 'ocr_pending', 'ocr_processing']
-  ↓
-On 'classified' / 'matched' → show "Processing complete" toast
-On 'ocr_failed' → show error toast "Could not read file"
-On 'needs_review' → show amber warning "Low confidence classification"
-  ↓
-Navigate to Document Detail or Shipment Detail (if shipment_id is set)
-```
+## 11. Business Rules
+
+1. **Shipment is created first** — the user always creates a shipment before uploading documents.
+2. **Document type is required before field confirmation is meaningful** — if `doc_type` is null, nudge the user to set it first.
+3. **Mismatch engine only runs with ≥ 2 documents** — hide the mismatch banner entirely when `documents.length < 2`.
+4. **Field confirmation is per document** — "Confirm All" on a document confirms only that document's fields. The shipment-level confirm-all confirms every document in the shipment.
+5. **Products are per document** — if a document is deleted, its products disappear.
+6. **`is_ready_to_classify = false`** — show amber chip "Missing: material, intended_use" so the user knows what to add before HS classification.
+7. **`invoice_number` deduplication** — creating two shipments with the same invoice number is rejected (`409`). This prevents accidental duplicate shipments.
+8. **Polling timeout** — 10 minutes max. Show "Processing timed out — please re-upload the file."
+9. **Confidence thresholds**:
+   - ≥ 0.85 → green
+   - 0.70–0.84 → amber
+   - < 0.70 → red + "Needs review"
 
 ---
 
-## 11. Document Detail Page
+## 12. Migration Checklist (What Changed vs Old Flow)
 
-### Header
-- Filename, file type badge, status badge, uploaded date
-- Download button (uses `download_url` from `GET /documents/{id}`)
-
-### "Products" tab  ← **NEW**
-Source: `GET /api/v1/documents/{document_id}/products`
-
-Table columns:
-| Column | Notes |
-|---|---|
-| Product Name | `product_name` |
-| HS Code | `existing_hs_code` — monospace chip |
-| Quantity | `quantity` |
-| Unit Price | `unit_price` + `currency` |
-| Origin → Destination | `origin_country` → `destination_country` with flag emoji |
-| Ready? | Green tick or amber "Missing: material, intended_use" |
-
-Empty state: "No products extracted" (shown while processing, or if doc has no product lines)
-
-### "Fields" tab  ← **updated**
-Source: `GET /api/v1/documents/{document_id}/fields`
-
-Group rows by `field_name`. For each field:
-- Display label (from Field Name Reference table)
-- `value_normalized ?? value_raw`
-- Confidence badge (green ≥ 0.85, amber 0.70–0.84, red < 0.70)
-- Status badge
-- "Confirm" / "Correct" buttons
-
-Corrected fields: strike through `value_raw`, show `corrected_value` in green.
-
----
-
-## 12. Shipment Detail — Fields Tab
-
-### Layout
-Three sub-sections stacked vertically:
-
-#### 12.1 Mismatches banner (only when mismatches exist)
-Source: `GET /api/v1/shipments/{id}/field-mismatches`
-
-```
-┌──────────────────────────────────────────────────────────┐
-│ ⚠ 2 field conflicts detected across documents            │
-│                                                          │
-│ [error] gross_weight                                     │
-│   • Invoice (invoicem_123.pdf): 830 kg                   │
-│   • Packing List (pl_456.pdf): 792 kg                    │
-│                                                          │
-│ [warning] party_consignee                                │
-│   • Invoice: SAN WOJ                                     │
-│   • Packing List: San Woj Ltd                            │
-└──────────────────────────────────────────────────────────┘
-```
-
-- `severity=error`: red border, `AlertOctagon` icon
-- `severity=warning`: amber border, `AlertTriangle` icon
-- Each value row shows the document filename (link to document detail) + the value
-- A "Review" chip links to the corresponding field in the Fields table below
-
-#### 12.2 Products table
-Source: `GET /api/v1/shipments/{id}/products`
-
-Same columns as Document Detail Products tab, with an extra "Source Document" column showing the filename chip.
-
-Group by `document_id` — show a separator row per document with the filename as a sticky sub-header.
-
-#### 12.3 Extracted fields table
-Source: `GET /api/v1/shipments/{id}/fields`
-
-Group by `field_name`. For each unique field name:
-- If all docs agree → single value chip
-- If docs disagree → multiple chips, each labelled with the source filename; highlight in red (error) or amber (warning) per mismatch severity
-- Confirm / Correct per individual field record (expanded row)
-
----
-
-## 13. Business Rules
-
-1. **Polling timeout**: stop polling after 10 minutes. Show "Processing timed out" error state.
-2. **Retry on error**: if `status = 'ocr_failed'`, show a "Retry" button that re-triggers processing (call `DELETE /documents/{id}` then re-upload, or contact backend).
-3. **Products are per-document**: `DocumentProduct` records are tied to a `document_id`. If a document is deleted, its products disappear.
-4. **invoice_number auto-linking**: after status transitions to `matched`, `document.shipment_id` is set. Navigate to the shipment or show a "Grouped into Shipment #…" pill on the document card.
-5. **Zero-tolerance mismatch fields**: `gross_weight`, `net_weight`, `currency`, `hs_code`, `invoice_value`, `stated_origin` — any discrepancy is `error` severity regardless of org settings.
-6. **`is_ready_to_classify = false`**: show an amber chip listing `missing_required_fields` so the user knows what information to provide before the product can be HS-classified.
-7. **Confidence display**: always show raw confidence as a percentage tooltip. Use colour bands (green/amber/red) for quick scanning.
+| # | What to change | Section |
+|---|---|---|
+| 1 | **New page/flow**: Create Shipment form before upload | §9.1 |
+| 2 | Upload endpoints now accept `shipment_id` form field | §4.2 |
+| 3 | Extend file accept to WEBP/DOCX/XLSX/CSV | §10 |
+| 4 | `GET /shipments/{id}` now returns `ShipmentDetail` with `documents[]` | §4.1 |
+| 5 | New document type picker when `status === 'needs_review'` | §9.2 |
+| 6 | New `POST /shipments/` create endpoint | §4.1 |
+| 7 | New "Products" tab on Document Detail | §9.3 |
+| 8 | New "Confirm All" button per document | §9.3 |
+| 9 | Mismatch banner: only shown when ≥ 2 docs | §9.2 |
+| 10 | Add `bill_of_material` + `product_specification` to doc type picker | §2 |
+| 11 | New query keys + invalidation rules | §7, §8 |

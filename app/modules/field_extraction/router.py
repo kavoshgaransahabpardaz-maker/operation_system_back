@@ -95,6 +95,37 @@ async def list_fields_for_document(
     return list(result.scalars())
 
 
+@router.post("/shipments/{shipment_id}/fields/confirm-all", response_model=dict)
+async def confirm_all_fields_for_shipment(
+    shipment_id: uuid.UUID,
+    document_id: uuid.UUID | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Confirm all EXTRACTED fields for a shipment (or just one document within it).
+    Skips fields already confirmed or corrected.
+    Returns {confirmed: N}.
+    """
+    query = select(ExtractedField).where(
+        ExtractedField.shipment_id == shipment_id,
+        ExtractedField.status == ExtractedFieldStatus.EXTRACTED,
+    )
+    if document_id:
+        query = query.where(ExtractedField.document_id == document_id)
+
+    result = await db.execute(query)
+    fields = list(result.scalars())
+    now = datetime.now(timezone.utc)
+    for field in fields:
+        field.status = ExtractedFieldStatus.CONFIRMED
+        field.confirmed_at = now
+        field.confirmed_by = current_user.id
+
+    await db.commit()
+    return {"confirmed": len(fields)}
+
+
 @router.get("/shipments/{shipment_id}/field-mismatches", response_model=ShipmentMismatchOut)
 async def get_shipment_field_mismatches(
     shipment_id: uuid.UUID,

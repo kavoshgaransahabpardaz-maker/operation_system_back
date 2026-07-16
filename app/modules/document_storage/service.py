@@ -89,6 +89,7 @@ async def upload_document(
     org_id: uuid.UUID,
     source: DocumentSource,
     uploaded_by: uuid.UUID | None = None,
+    shipment_id: uuid.UUID | None = None,
 ) -> Document:
     content_hash, data = _compute_hash(file_obj)
 
@@ -111,11 +112,16 @@ async def upload_document(
         status=DocumentStatus.UPLOADED,
         uploaded_by=uploaded_by,
         content_hash=content_hash,
+        shipment_id=shipment_id,
     )
     db.add(doc)
 
     version = DocumentVersion(id=uuid.uuid4(), document_id=doc.id, version_number=1, file_key=file_key)
     db.add(version)
+
+    if shipment_id:
+        from app.modules.shipment_identification.models import ShipmentDocument
+        db.add(ShipmentDocument(shipment_id=shipment_id, document_id=doc.id, associated_by=uploaded_by))
 
     await db.commit()
     await db.refresh(doc)

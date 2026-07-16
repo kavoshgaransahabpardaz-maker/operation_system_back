@@ -1,7 +1,7 @@
 import io
 import uuid
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_async_db
@@ -55,6 +55,7 @@ def _validate_file(filename: str, content_type: str, size_bytes: int) -> None:
 @router.post("/upload", response_model=DocumentOut, status_code=201)
 async def upload(
     file: UploadFile = File(...),
+    shipment_id: uuid.UUID | None = Form(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -70,6 +71,7 @@ async def upload(
         org_id=current_user.org_id,
         source=DocumentSource.UPLOAD,
         uploaded_by=current_user.id,
+        shipment_id=shipment_id,
     )
     return doc
 
@@ -77,6 +79,7 @@ async def upload(
 @router.post("/upload/batch", response_model=list[DocumentOut], status_code=201)
 async def upload_batch(
     files: list[UploadFile] = File(...),
+    shipment_id: uuid.UUID | None = Form(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -100,6 +103,7 @@ async def upload_batch(
             org_id=current_user.org_id,
             source=DocumentSource.UPLOAD,
             uploaded_by=current_user.id,
+            shipment_id=shipment_id,
         )
         results.append(doc)
 
