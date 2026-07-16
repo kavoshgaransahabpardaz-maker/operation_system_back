@@ -1,9 +1,10 @@
 """Add document_products table for classification API results
 
 Revision ID: 3dfa2c7a2a98
-Revises: f2a3b4c5d6e7
+Revises: f2a3b4c5d6e7, a1b2c3d4e5f6
 Create Date: 2026-07-16
 
+Merges hasti_features (f2a3b4c5d6e7) and orchestration_and_source_prefs (a1b2c3d4e5f6) branches.
 """
 from typing import Union
 
@@ -12,7 +13,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "3dfa2c7a2a98"
-down_revision: Union[str, None] = "f2a3b4c5d6e7"
+down_revision: Union[str, tuple] = ("f2a3b4c5d6e7", "a1b2c3d4e5f6")
 branch_labels = None
 depends_on = None
 
