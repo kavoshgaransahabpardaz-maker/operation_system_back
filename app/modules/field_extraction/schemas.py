@@ -133,9 +133,21 @@ class ProductGroupMismatch(BaseModel):
     field_mismatches: list[ProductFieldMismatch]
 
 
+class UnmatchedProduct(BaseModel):
+    document_id: uuid.UUID                    # which document HAS this product
+    product_id: uuid.UUID
+    product_name: str | None
+    hs_code: str | None
+    quantity: str | None
+    unit_price: str | None
+    currency: str | None
+    missing_in: list[uuid.UUID]               # document ids that have products but NOT this one
+
+
 # ── Combined response ─────────────────────────────────────────────────────────
 
 class ShipmentMismatchOut(BaseModel):
     shipment_id: uuid.UUID
     mismatches: list[FieldMismatch]           # shipment/document-level field mismatches
-    product_mismatches: list[ProductGroupMismatch] = []  # product-level mismatches
+    product_mismatches: list[ProductGroupMismatch] = []  # matched products with differing fields
+    unmatched_products: list[UnmatchedProduct] = []      # products present in some docs but missing from others

@@ -20,6 +20,7 @@ from app.modules.field_extraction.schemas import (
     ProductGroupMismatch,
     ProductMismatchValue,
     ShipmentMismatchOut,
+    UnmatchedProduct,
 )
 from app.modules.user_management.models import User
 
@@ -149,8 +150,8 @@ async def get_shipment_field_mismatches(
     """
     from app.modules.field_extraction.service import detect_product_mismatches, detect_shipment_mismatches
 
-    raw_field, raw_product = await detect_shipment_mismatches(shipment_id, db), None
-    raw_product = await detect_product_mismatches(shipment_id, db)
+    raw_field = await detect_shipment_mismatches(shipment_id, db)
+    raw_matched, raw_unmatched = await detect_product_mismatches(shipment_id, db)
 
     field_mismatches = [
         FieldMismatch(
@@ -191,13 +192,28 @@ async def get_shipment_field_mismatches(
                 for f in g["field_mismatches"]
             ],
         )
-        for g in raw_product
+        for g in raw_matched
+    ]
+
+    unmatched_products = [
+        UnmatchedProduct(
+            document_id=u["document_id"],
+            product_id=u["product_id"],
+            product_name=u["product_name"],
+            hs_code=u["hs_code"],
+            quantity=u["quantity"],
+            unit_price=u["unit_price"],
+            currency=u["currency"],
+            missing_in=u["missing_in"],
+        )
+        for u in raw_unmatched
     ]
 
     return ShipmentMismatchOut(
         shipment_id=shipment_id,
         mismatches=field_mismatches,
         product_mismatches=product_mismatches,
+        unmatched_products=unmatched_products,
     )
 
 

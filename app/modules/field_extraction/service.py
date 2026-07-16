@@ -80,11 +80,11 @@ MISMATCH_CHECK_FIELDS: set[str] = {
     FieldName.CURRENCY.value,
     FieldName.STATED_ORIGIN.value,
     FieldName.DESTINATION_COUNTRY.value,
-    FieldName.HS_CODE.value,
+    # HS_CODE omitted — compared at product level via DocumentProduct.existing_hs_code
     FieldName.INCOTERM.value,
     FieldName.PARTY_SHIPPER.value,
     FieldName.PARTY_CONSIGNEE.value,
-    FieldName.INVOICE_VALUE.value,
+    # INVOICE_VALUE omitted — per-product unit_price is compared at product level
     FieldName.PLACE_OF_LOADING.value,
     FieldName.PORT_OF_DISCHARGE.value,
     FieldName.INVOICE_DATE.value,
@@ -95,8 +95,6 @@ MISMATCH_CRITICAL_FIELDS: set[str] = {
     FieldName.GROSS_WEIGHT.value,
     FieldName.NET_WEIGHT.value,
     FieldName.CURRENCY.value,
-    FieldName.HS_CODE.value,
-    FieldName.INVOICE_VALUE.value,
     FieldName.STATED_ORIGIN.value,
     FieldName.INVOICE_DATE.value,
 }
@@ -403,11 +401,15 @@ def _product_key(product) -> tuple[str, str] | None:
     return None
 
 
-async def detect_product_mismatches(shipment_id: uuid.UUID, db: AsyncSession) -> list[dict]:
+async def detect_product_mismatches(
+    shipment_id: uuid.UUID, db: AsyncSession
+) -> tuple[list[dict], list[dict]]:
     """
     Compare DocumentProduct rows across documents in a shipment.
-    Products are matched by HS code (preferred) or product name.
-    Returns mismatch groups only for products present in 2+ documents.
+
+    Returns (group_mismatches, unmatched_products):
+    - group_mismatches: products matched by HS code/name across 2+ docs with field differences
+    - unmatched_products: products present in one doc but absent from other docs that have products
     """
     from app.modules.classification_api.models import DocumentProduct
 
@@ -417,9 +419,9 @@ async def detect_product_mismatches(shipment_id: uuid.UUID, db: AsyncSession) ->
     all_products = list(result.scalars())
 
     # Need products from at least 2 different documents
-    doc_ids = {p.document_id for p in all_products}
-    if len(doc_ids) < 2:
-        return []
+    docs_with_products: set[str] = {str(p.document_id) for p in all_products}
+    if len(docs_with_products) < 2:
+        return [], []
 
     # Group: key → doc_id → [products]
     by_key: dict[tuple, dict[str, list]] = {}
@@ -433,15 +435,36 @@ async def detect_product_mismatches(shipment_id: uuid.UUID, db: AsyncSession) ->
         by_key[key].setdefault(doc_id, []).append(p)
 
     group_mismatches: list[dict] = []
+    unmatched_products: list[dict] = []
 
     for (key_type, key_value), by_doc in by_key.items():
         if len(by_doc) < 2:
-            continue  # product only appears in one document — nothing to compare
+            # Product exists in only one document; other documents with products don't have it
+            present_doc_id = next(iter(by_doc))
+            missing_in = [
+                uuid.UUID(d) for d in docs_with_products if d != present_doc_id
+            ]
+            if missing_in:
+                product = by_doc[present_doc_id][0]
+                unit = str(product.unit_price).strip() if product.unit_price is not None else None
+                if unit and unit.lower() in ("none", "null", ""):
+                    unit = None
+                unmatched_products.append({
+                    "document_id": product.document_id,
+                    "product_id": product.id,
+                    "product_name": product.product_name,
+                    "hs_code": product.existing_hs_code,
+                    "quantity": str(product.quantity).strip() if product.quantity is not None else None,
+                    "unit_price": unit,
+                    "currency": product.currency,
+                    "missing_in": missing_in,
+                })
+            continue
 
+        # Product present in 2+ documents — compare field by field
         field_mismatches: list[dict] = []
 
         for field_attr, display_label, severity in _PRODUCT_COMPARE_FIELDS:
-            # Best value per document: take first product (they should agree within one doc)
             per_doc_values: list[dict] = []
             for doc_id, prods in by_doc.items():
                 p = prods[0]
@@ -459,7 +482,7 @@ async def detect_product_mismatches(shipment_id: uuid.UUID, db: AsyncSession) ->
                 })
 
             if len(per_doc_values) < 2:
-                continue  # field not present in enough documents to compare
+                continue
 
             first = per_doc_values[0]["value"]
             all_match = all(
@@ -479,7 +502,6 @@ async def detect_product_mismatches(shipment_id: uuid.UUID, db: AsyncSession) ->
         if not field_mismatches:
             continue
 
-        # Representative HS code for this group
         sample = list(by_doc.values())[0][0]
         group_mismatches.append({
             "product_key": key_value,
@@ -487,4 +509,4 @@ async def detect_product_mismatches(shipment_id: uuid.UUID, db: AsyncSession) ->
             "field_mismatches": field_mismatches,
         })
 
-    return group_mismatches
+    return group_mismatches, unmatched_products
