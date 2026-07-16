@@ -85,6 +85,9 @@ MISMATCH_CHECK_FIELDS: set[str] = {
     FieldName.PARTY_SHIPPER.value,
     FieldName.PARTY_CONSIGNEE.value,
     FieldName.INVOICE_VALUE.value,
+    FieldName.PLACE_OF_LOADING.value,
+    FieldName.PORT_OF_DISCHARGE.value,
+    FieldName.INVOICE_DATE.value,
 }
 
 # These mismatches are blocking / high-severity
@@ -95,6 +98,7 @@ MISMATCH_CRITICAL_FIELDS: set[str] = {
     FieldName.HS_CODE.value,
     FieldName.INVOICE_VALUE.value,
     FieldName.STATED_ORIGIN.value,
+    FieldName.INVOICE_DATE.value,
 }
 
 # Field-type mapping for metadata
@@ -350,3 +354,137 @@ async def detect_shipment_mismatches(
         })
 
     return mismatches
+
+
+# ── Product mismatch detection ────────────────────────────────────────────────
+
+import re as _re
+
+_PRODUCT_COMPARE_FIELDS: list[tuple[str, str, str]] = [
+    # (field_attr, display_label, severity)
+    ("existing_hs_code", "HS Code",             "error"),
+    ("quantity",         "Quantity",             "error"),
+    ("unit_price",       "Unit Price",           "error"),
+    ("currency",         "Currency",             "error"),
+    ("origin_country",   "Country of Origin",    "warning"),
+    ("destination_country", "Destination Country", "warning"),
+]
+
+_PRODUCT_DECIMAL_FIELDS: frozenset[str] = frozenset({"quantity", "unit_price"})
+
+
+def _extract_number(s: str) -> Decimal | None:
+    """Pull the leading numeric portion from a string (handles '1kg', '5.20 GBP', etc.)."""
+    m = _re.match(r"^\s*([0-9]+\.?[0-9]*)", s.strip())
+    if m:
+        try:
+            return Decimal(m.group(1))
+        except InvalidOperation:
+            pass
+    return None
+
+
+def _product_values_match(field_name: str, a: str, b: str) -> bool:
+    if field_name in _PRODUCT_DECIMAL_FIELDS:
+        na, nb = _extract_number(a), _extract_number(b)
+        if na is not None and nb is not None:
+            return na == nb
+    return a.strip().lower() == b.strip().lower()
+
+
+def _product_key(product) -> tuple[str, str] | None:
+    """Return (key_type, key_value) for grouping. HS code preferred; fall back to name."""
+    hs = (product.existing_hs_code or "").strip().replace(" ", "").upper()
+    if hs and hs.lower() not in ("null", "none", ""):
+        return ("hs", hs)
+    name = (product.product_name or "").strip().lower()
+    if name:
+        return ("name", name)
+    return None
+
+
+async def detect_product_mismatches(shipment_id: uuid.UUID, db: AsyncSession) -> list[dict]:
+    """
+    Compare DocumentProduct rows across documents in a shipment.
+    Products are matched by HS code (preferred) or product name.
+    Returns mismatch groups only for products present in 2+ documents.
+    """
+    from app.modules.classification_api.models import DocumentProduct
+
+    result = await db.execute(
+        select(DocumentProduct).where(DocumentProduct.shipment_id == shipment_id)
+    )
+    all_products = list(result.scalars())
+
+    # Need products from at least 2 different documents
+    doc_ids = {p.document_id for p in all_products}
+    if len(doc_ids) < 2:
+        return []
+
+    # Group: key → doc_id → [products]
+    by_key: dict[tuple, dict[str, list]] = {}
+    for p in all_products:
+        key = _product_key(p)
+        if key is None:
+            continue
+        doc_id = str(p.document_id)
+        if key not in by_key:
+            by_key[key] = {}
+        by_key[key].setdefault(doc_id, []).append(p)
+
+    group_mismatches: list[dict] = []
+
+    for (key_type, key_value), by_doc in by_key.items():
+        if len(by_doc) < 2:
+            continue  # product only appears in one document — nothing to compare
+
+        field_mismatches: list[dict] = []
+
+        for field_attr, display_label, severity in _PRODUCT_COMPARE_FIELDS:
+            # Best value per document: take first product (they should agree within one doc)
+            per_doc_values: list[dict] = []
+            for doc_id, prods in by_doc.items():
+                p = prods[0]
+                raw = getattr(p, field_attr, None)
+                if raw is None:
+                    continue
+                val = str(raw).strip()
+                if not val or val.lower() in ("none", "null", ""):
+                    continue
+                per_doc_values.append({
+                    "document_id": p.document_id,
+                    "product_id": p.id,
+                    "product_name": p.product_name,
+                    "value": val,
+                })
+
+            if len(per_doc_values) < 2:
+                continue  # field not present in enough documents to compare
+
+            first = per_doc_values[0]["value"]
+            all_match = all(
+                _product_values_match(field_attr, first, v["value"])
+                for v in per_doc_values[1:]
+            )
+            if all_match:
+                continue
+
+            field_mismatches.append({
+                "field_name": field_attr,
+                "display_label": display_label,
+                "severity": severity,
+                "values": per_doc_values,
+            })
+
+        if not field_mismatches:
+            continue
+
+        # Representative HS code for this group
+        sample = list(by_doc.values())[0][0]
+        group_mismatches.append({
+            "product_key": key_value,
+            "hs_code": sample.existing_hs_code if key_type == "hs" else None,
+            "field_mismatches": field_mismatches,
+        })
+
+    return group_mismatches

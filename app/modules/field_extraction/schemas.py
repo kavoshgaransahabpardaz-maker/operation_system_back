@@ -42,6 +42,7 @@ class FieldName(str, enum.Enum):
     STATED_ORIGIN = "stated_origin"
     DESTINATION_COUNTRY = "destination_country"
     PLACE_OF_LOADING = "place_of_loading"
+    PORT_OF_DISCHARGE = "port_of_discharge"
     INCOTERM = "incoterm"
     PREFERENTIAL_DUTY = "preferential_duty"   # self-certification statement text or "yes"
 
@@ -95,7 +96,8 @@ class LLMFieldsResponse(BaseModel):
     fields: list[LLMFieldItem]
 
 
-# Mismatch detection schemas
+# ── Shipment-level field mismatch (across documents) ─────────────────────────
+
 class MismatchValue(BaseModel):
     document_id: uuid.UUID
     value_raw: str
@@ -109,6 +111,31 @@ class FieldMismatch(BaseModel):
     values: list[MismatchValue]
 
 
+# ── Product-level mismatch (same product, different values across documents) ──
+
+class ProductMismatchValue(BaseModel):
+    document_id: uuid.UUID
+    product_id: uuid.UUID
+    product_name: str | None
+    value: str
+
+
+class ProductFieldMismatch(BaseModel):
+    field_name: str                           # "quantity", "unit_price", "existing_hs_code", …
+    display_label: str                        # human-readable
+    severity: Literal["warning", "error"]
+    values: list[ProductMismatchValue]
+
+
+class ProductGroupMismatch(BaseModel):
+    product_key: str                          # HS code (preferred) or product name
+    hs_code: str | None                       # HS code if matching was hs-based
+    field_mismatches: list[ProductFieldMismatch]
+
+
+# ── Combined response ─────────────────────────────────────────────────────────
+
 class ShipmentMismatchOut(BaseModel):
     shipment_id: uuid.UUID
-    mismatches: list[FieldMismatch]
+    mismatches: list[FieldMismatch]           # shipment/document-level field mismatches
+    product_mismatches: list[ProductGroupMismatch] = []  # product-level mismatches

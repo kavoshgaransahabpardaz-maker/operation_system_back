@@ -16,6 +16,9 @@ from app.modules.field_extraction.schemas import (
     FieldCorrectRequest,
     FieldMismatch,
     MismatchValue,
+    ProductFieldMismatch,
+    ProductGroupMismatch,
+    ProductMismatchValue,
     ShipmentMismatchOut,
 )
 from app.modules.user_management.models import User
@@ -133,16 +136,23 @@ async def get_shipment_field_mismatches(
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    Compare extracted field values across all documents in a shipment.
-    Returns fields where documents contradict each other.
-    severity=error means the discrepancy is customs-critical (weights, currency, HS code, value).
-    severity=warning means the discrepancy is notable but less critical.
+    Compare extracted field values AND product lines across all documents in a shipment.
+
+    Returns:
+    - mismatches: shipment-level fields that contradict across documents
+      (currency, weights, HS code, invoice value, incoterm, dates, parties, ports)
+    - product_mismatches: products matched by HS code or name that have
+      differing quantity / unit price / currency / origin across documents
+
+    severity=error → customs-critical discrepancy
+    severity=warning → notable but not blocking
     """
-    from app.modules.field_extraction.service import detect_shipment_mismatches
+    from app.modules.field_extraction.service import detect_product_mismatches, detect_shipment_mismatches
 
-    raw_mismatches = await detect_shipment_mismatches(shipment_id, db)
+    raw_field, raw_product = await detect_shipment_mismatches(shipment_id, db), None
+    raw_product = await detect_product_mismatches(shipment_id, db)
 
-    mismatches = [
+    field_mismatches = [
         FieldMismatch(
             field_name=m["field_name"],
             severity=m["severity"],
@@ -156,10 +166,39 @@ async def get_shipment_field_mismatches(
                 for v in m["values"]
             ],
         )
-        for m in raw_mismatches
+        for m in raw_field
     ]
 
-    return ShipmentMismatchOut(shipment_id=shipment_id, mismatches=mismatches)
+    product_mismatches = [
+        ProductGroupMismatch(
+            product_key=g["product_key"],
+            hs_code=g["hs_code"],
+            field_mismatches=[
+                ProductFieldMismatch(
+                    field_name=f["field_name"],
+                    display_label=f["display_label"],
+                    severity=f["severity"],
+                    values=[
+                        ProductMismatchValue(
+                            document_id=v["document_id"],
+                            product_id=v["product_id"],
+                            product_name=v["product_name"],
+                            value=v["value"],
+                        )
+                        for v in f["values"]
+                    ],
+                )
+                for f in g["field_mismatches"]
+            ],
+        )
+        for g in raw_product
+    ]
+
+    return ShipmentMismatchOut(
+        shipment_id=shipment_id,
+        mismatches=field_mismatches,
+        product_mismatches=product_mismatches,
+    )
 
 
 @router.post("/fields/{field_id}/confirm", response_model=ExtractedFieldOut)

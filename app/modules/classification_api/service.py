@@ -39,6 +39,7 @@ _SHIPMENT_FIELD_MAP: list[tuple[str, str, str]] = [
     ("currency", "currency", FieldType.ISO_CODE.value),
     ("incoterms", "incoterm", FieldType.ISO_CODE.value),
     ("port_of_loading", "place_of_loading", FieldType.STRING.value),
+    ("port_of_discharge", "port_of_discharge", FieldType.STRING.value),
     ("total_value", "invoice_value", FieldType.DECIMAL.value),
 ]
 
