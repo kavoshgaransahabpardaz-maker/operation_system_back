@@ -111,6 +111,11 @@ def identify_and_associate(db: Session, document_id: uuid.UUID) -> Shipment | No
     if not doc:
         raise ValueError(f"Document {document_id} not found")
 
+    # If the document was explicitly uploaded to an existing shipment, never override it.
+    # The classification API pipeline (extract_fields_task) handles invoice-ref linking.
+    if doc.shipment_id:
+        return db.query(Shipment).filter(Shipment.id == doc.shipment_id).first()
+
     ocr: OcrResult = db.query(OcrResult).filter(OcrResult.document_id == document_id).first()
     if not ocr:
         doc.status = DocumentStatus.UNMATCHED
