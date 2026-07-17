@@ -75,28 +75,42 @@ UNIVERSAL_FIELDS: list[FieldName] = [
 
 # Fields checked for cross-document consistency within a shipment
 MISMATCH_CHECK_FIELDS: set[str] = {
+    # Identifiers
+    FieldName.REFERENCE.value,           # invoice number must match across CI and PL
+    FieldName.INCOTERM.value,
+    # Financials (total-level, not per-product — per-product was removed from ExtractedField)
+    FieldName.INVOICE_VALUE.value,
+    FieldName.FREIGHT_VALUE.value,
+    FieldName.INSURANCE_VALUE.value,
+    FieldName.CURRENCY.value,
+    # Weights & Measures
     FieldName.GROSS_WEIGHT.value,
     FieldName.NET_WEIGHT.value,
-    FieldName.CURRENCY.value,
+    # Geography
     FieldName.STATED_ORIGIN.value,
     FieldName.DESTINATION_COUNTRY.value,
-    # HS_CODE omitted — compared at product level via DocumentProduct.existing_hs_code
-    FieldName.INCOTERM.value,
-    FieldName.PARTY_SHIPPER.value,
-    FieldName.PARTY_CONSIGNEE.value,
-    # INVOICE_VALUE omitted — per-product unit_price is compared at product level
     FieldName.PLACE_OF_LOADING.value,
     FieldName.PORT_OF_DISCHARGE.value,
+    # Entities
+    FieldName.PARTY_SHIPPER.value,
+    FieldName.PARTY_CONSIGNEE.value,
+    FieldName.VAT_NUMBER_SELLER.value,
+    FieldName.VAT_NUMBER_BUYER.value,
+    FieldName.EORI_NUMBER.value,
+    # Dates
     FieldName.INVOICE_DATE.value,
+    # HS_CODE omitted — compared at product level via DocumentProduct.existing_hs_code
 }
 
 # These mismatches are blocking / high-severity
 MISMATCH_CRITICAL_FIELDS: set[str] = {
+    FieldName.REFERENCE.value,           # invoice number cross-doc mismatch is critical
+    FieldName.CURRENCY.value,
     FieldName.GROSS_WEIGHT.value,
     FieldName.NET_WEIGHT.value,
-    FieldName.CURRENCY.value,
     FieldName.STATED_ORIGIN.value,
     FieldName.INVOICE_DATE.value,
+    FieldName.EORI_NUMBER.value,
 }
 
 # Field-type mapping for metadata

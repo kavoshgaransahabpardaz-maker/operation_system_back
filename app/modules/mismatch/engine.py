@@ -11,10 +11,16 @@ from decimal import Decimal, InvalidOperation
 LOW_CONFIDENCE_THRESHOLD = 0.70
 
 # Field names as string literals to avoid import cycles with schemas
-_ZERO_TOLERANCE_FIELDS = {"hs_code", "stated_origin", "currency"}
+_ZERO_TOLERANCE_FIELDS = {
+    # Identifiers: invoice number and incoterm must match exactly
+    "reference", "incoterm",
+    # Compliance: origin, destination, currency, VAT numbers, EORI
+    "hs_code", "stated_origin", "destination_country", "currency",
+    "vat_number_seller", "vat_number_buyer", "eori_number",
+}
 # quantity excluded: per-product quantities are stored with field_name="quantity", making
 # cross-doc comparison meaningless at shipment level. Quantity is compared at product level.
-_PCT_BAND_FIELDS = {"invoice_value", "gross_weight", "net_weight"}
+_PCT_BAND_FIELDS = {"invoice_value", "freight_value", "insurance_value", "gross_weight", "net_weight"}
 _FUZZY_NAME_FIELDS = {"party_shipper", "party_consignee"}
 
 
