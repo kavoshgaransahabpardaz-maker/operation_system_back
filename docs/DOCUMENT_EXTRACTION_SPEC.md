@@ -171,6 +171,8 @@ interface DocumentProduct {
 }
 
 // ── Mismatch types ────────────────────────────────────────────────────────────
+
+// Shipment-level field mismatch (same field disagrees across documents)
 interface MismatchValue {
   document_id: string;
   value_raw: string;
@@ -184,9 +186,44 @@ interface FieldMismatch {
   values: MismatchValue[];
 }
 
+// Product-level mismatch (same product matched across documents, field differs)
+interface ProductMismatchValue {
+  document_id: string;
+  product_id: string;
+  product_name: string | null;
+  value: string;
+}
+
+interface ProductFieldMismatch {
+  field_name: string;          // "quantity" | "unit_price" | "existing_hs_code" | "currency" | "origin_country" | "destination_country"
+  display_label: string;       // "Quantity" | "Unit Price" | "HS Code" | …
+  severity: 'error' | 'warning';
+  values: ProductMismatchValue[];
+}
+
+interface ProductGroupMismatch {
+  product_key: string;         // HS code or product name used to match across docs
+  hs_code: string | null;      // set when matching was hs-based
+  field_mismatches: ProductFieldMismatch[];
+}
+
+// Product present in one document but absent from another doc that has products
+interface UnmatchedProduct {
+  document_id: string;         // the document that HAS this product
+  product_id: string;
+  product_name: string | null;
+  hs_code: string | null;
+  quantity: string | null;
+  unit_price: string | null;
+  currency: string | null;
+  missing_in: string[];        // document_ids that have products but NOT this one
+}
+
 interface ShipmentMismatchOut {
   shipment_id: string;
-  mismatches: FieldMismatch[];
+  mismatches: FieldMismatch[];                   // shipment-level field conflicts
+  product_mismatches: ProductGroupMismatch[];    // matched products with differing fields
+  unmatched_products: UnmatchedProduct[];        // products with no counterpart in other docs
 }
 ```
 
@@ -378,26 +415,43 @@ GET /api/v1/shipments/{shipment_id}/products
 
 ### 4.7 Cross-Document Mismatch Detection
 
-Compares field values across all documents in a shipment. Returns empty list when fewer than 2 documents share the same field.
+Compares extracted values across all documents in a shipment. Returns empty arrays when fewer than 2 documents are present.
 
 ```
 GET /api/v1/shipments/{shipment_id}/field-mismatches
 ```
 **Response**: `200 ShipmentMismatchOut`
 
-**Severity rules**:
+Three sections in the response:
+
+**`mismatches`** — shipment-level fields that conflict across documents:
+
 | field_name | severity |
 |---|---|
 | `gross_weight` | **error** |
 | `net_weight` | **error** |
 | `currency` | **error** |
-| `hs_code` | **error** |
-| `invoice_value` | **error** |
 | `stated_origin` | **error** |
+| `invoice_date` | **error** |
 | `destination_country` | warning |
 | `incoterm` | warning |
 | `party_shipper` | warning |
 | `party_consignee` | warning |
+| `place_of_loading` | warning |
+| `port_of_discharge` | warning |
+
+**`product_mismatches`** — products matched across documents (by HS code or name) where a field differs. Fields compared:
+
+| field_name | display_label | severity |
+|---|---|---|
+| `existing_hs_code` | HS Code | **error** |
+| `quantity` | Quantity | **error** |
+| `unit_price` | Unit Price | **error** |
+| `currency` | Currency | **error** |
+| `origin_country` | Country of Origin | warning |
+| `destination_country` | Destination Country | warning |
+
+**`unmatched_products`** — products present in one document but with no matching product in another document that has products. These indicate a coverage gap (e.g. packing list has a product the invoice doesn't).
 
 ---
 
@@ -636,23 +690,30 @@ Error case: `409` → show inline error "A shipment with this invoice number alr
 
 **Header**: Invoice reference chip, status badge (`active` / `on_hold` / `complete`), created date, Edit Status dropdown.
 
-**Mismatch Banner** (shown only when `mismatches.length > 0`):
+**Mismatch Banner** (shown only when any mismatch array is non-empty):
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ ⚠ 2 field conflicts detected                             │
+│ ⚠ 3 conflicts detected                                   │
 │                                                          │
-│ [error]   gross_weight                                   │
+│ SHIPMENT-LEVEL                                           │
+│ [error]   Gross Weight                                   │
 │   • invoicem_123.pdf : 830 kg                            │
 │   • pl_456.pdf       : 792 kg                            │
 │                                                          │
-│ [warning] party_consignee                                │
-│   • invoicem_123.pdf : SAN WOJ                           │
-│   • pl_456.pdf       : San Woj Ltd                       │
+│ PRODUCT-LEVEL — Paneer 1kg Block (HS 0406.10)            │
+│ [error]   Quantity                                       │
+│   • invoicem_123.pdf : 100 kg                            │
+│   • pl_456.pdf       : 98 kg                             │
+│                                                          │
+│ UNMATCHED PRODUCTS                                       │
+│ [warning] "Ghee" found in invoicem_123.pdf               │
+│           not present in pl_456.pdf                      │
 └──────────────────────────────────────────────────────────┘
 ```
 - Only call `GET /shipments/{id}/field-mismatches` when `documents.length >= 2`.
 - `severity=error` → red border + `AlertOctagon` icon.
 - `severity=warning` → amber border + `AlertTriangle` icon.
+- Total conflict count = `mismatches.length + product_mismatches.length + unmatched_products.length`.
 
 **Document List** (source: `ShipmentDetail.documents`):
 
