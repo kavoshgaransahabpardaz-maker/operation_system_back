@@ -194,10 +194,12 @@ async def delete_document(db: AsyncSession, org_id: uuid.UUID, document_id: uuid
     from app.modules.ocr_processing.models import OcrResult
     from app.modules.field_extraction.models import ExtractedField
     from app.modules.shipment_identification.models import ShipmentDocument
+    from app.modules.classification_api.models import DocumentProduct
 
     doc = await get_document(db, org_id, document_id)
 
     # Remove related rows in dependency order
+    await db.execute(sql_delete(DocumentProduct).where(DocumentProduct.document_id == document_id))
     await db.execute(sql_delete(ExtractedField).where(ExtractedField.document_id == document_id))
     await db.execute(sql_delete(ClassificationResult).where(ClassificationResult.document_id == document_id))
     await db.execute(sql_delete(OcrResult).where(OcrResult.document_id == document_id))

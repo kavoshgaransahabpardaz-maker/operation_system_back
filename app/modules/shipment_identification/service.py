@@ -426,6 +426,7 @@ async def delete_shipment(db: AsyncSession, org_id: uuid.UUID, shipment_id: uuid
     from app.modules.flags.models import Flag, FlagResolution
     from app.modules.field_extraction.models import ExtractedField
     from app.modules.intel.models import IntelMatch
+    from app.modules.classification_api.models import DocumentProduct
 
     result = await db.execute(
         select(Shipment).where(Shipment.id == shipment_id, Shipment.org_id == org_id)
@@ -444,6 +445,12 @@ async def delete_shipment(db: AsyncSession, org_id: uuid.UUID, shipment_id: uuid
     await db.execute(
         sql_update(ExtractedField)
         .where(ExtractedField.shipment_id == shipment_id)
+        .values(shipment_id=None)
+    )
+    # Nullify shipment_id on document products (FK to shipments, no cascade)
+    await db.execute(
+        sql_update(DocumentProduct)
+        .where(DocumentProduct.shipment_id == shipment_id)
         .values(shipment_id=None)
     )
     # Delete flag resolutions first (FK to flags)
