@@ -372,46 +372,39 @@ async def detect_shipment_mismatches(
 
 import re as _re
 
-_PRODUCT_COMPARE_FIELDS: list[tuple[str, str, str]] = [
-    # (field_attr, display_label, severity)
-    ("existing_hs_code", "HS Code",             "error"),
-    ("quantity",         "Quantity",             "error"),
-    ("unit_price",       "Unit Price",           "error"),
-    ("currency",         "Currency",             "error"),
-    ("origin_country",   "Country of Origin",    "warning"),
-    ("destination_country", "Destination Country", "warning"),
-]
 
-_PRODUCT_DECIMAL_FIELDS: frozenset[str] = frozenset({"quantity", "unit_price"})
+def _norm_hs(hs: str | None) -> str:
+    """Normalise an HS code: strip spaces, dots, uppercase."""
+    if not hs:
+        return ""
+    return hs.strip().replace(" ", "").replace(".", "").upper()
 
 
-def _extract_number(s: str) -> Decimal | None:
-    """Pull the leading numeric portion from a string (handles '1kg', '5.20 GBP', etc.)."""
-    m = _re.match(r"^\s*([0-9]+\.?[0-9]*)", s.strip())
-    if m:
-        try:
-            return Decimal(m.group(1))
-        except InvalidOperation:
-            pass
-    return None
+def _product_name_key(name: str | None) -> str:
+    return (name or "").strip().lower()
 
 
-def _product_values_match(field_name: str, a: str, b: str) -> bool:
-    if field_name in _PRODUCT_DECIMAL_FIELDS:
-        na, nb = _extract_number(a), _extract_number(b)
-        if na is not None and nb is not None:
-            return na == nb
-    return a.strip().lower() == b.strip().lower()
+def _best_match_in_list(product, candidates: list):
+    """
+    Find the best matching product in candidates.
+    Prefer HS code match; fall back to product name match.
+    Returns the matched candidate or None.
+    """
+    ci_hs = _norm_hs(product.existing_hs_code)
+    ci_name = _product_name_key(product.product_name)
 
+    # Try HS code match first
+    if ci_hs:
+        for c in candidates:
+            if _norm_hs(c.existing_hs_code) == ci_hs:
+                return c
 
-def _product_key(product) -> tuple[str, str] | None:
-    """Return (key_type, key_value) for grouping. HS code preferred; fall back to name."""
-    hs = (product.existing_hs_code or "").strip().replace(" ", "").upper()
-    if hs and hs.lower() not in ("null", "none", ""):
-        return ("hs", hs)
-    name = (product.product_name or "").strip().lower()
-    if name:
-        return ("name", name)
+    # Fall back to name match
+    if ci_name:
+        for c in candidates:
+            if _product_name_key(c.product_name) == ci_name:
+                return c
+
     return None
 
 
@@ -419,108 +412,118 @@ async def detect_product_mismatches(
     shipment_id: uuid.UUID, db: AsyncSession
 ) -> tuple[list[dict], list[dict]]:
     """
-    Compare DocumentProduct rows across documents in a shipment.
+    Compare product lines between the Commercial Invoice and the Packing List.
 
-    Returns (group_mismatches, unmatched_products):
-    - group_mismatches: products matched by HS code/name across 2+ docs with field differences
-    - unmatched_products: products present in one doc but absent from other docs that have products
+    Strategy:
+    - Product list is sourced from CI (authoritative).
+    - If both CI and PL have products, match each CI product to a PL product
+      (by HS code first, then by product name) and compare HS codes.
+    - Products in CI with no PL counterpart → unmatched (missing from PL).
+    - Products in PL with no CI counterpart → unmatched (extra in PL).
+    - If only one of CI/PL has products, no comparison is possible → return empty.
+
+    Returns (hs_mismatches, unmatched_products).
     """
     from app.modules.classification_api.models import DocumentProduct
+    from app.modules.document_classification.models import ClassificationResult, DocumentType
 
-    result = await db.execute(
+    # Load all products for this shipment
+    prod_result = await db.execute(
         select(DocumentProduct).where(DocumentProduct.shipment_id == shipment_id)
     )
-    all_products = list(result.scalars())
+    all_products = list(prod_result.scalars())
 
-    # Need products from at least 2 different documents
-    docs_with_products: set[str] = {str(p.document_id) for p in all_products}
-    if len(docs_with_products) < 2:
+    if not all_products:
         return [], []
 
-    # Group: key → doc_id → [products]
-    by_key: dict[tuple, dict[str, list]] = {}
+    # Load doc types for all document_ids that have products
+    doc_ids = list({p.document_id for p in all_products})
+    cls_result = await db.execute(
+        select(ClassificationResult).where(ClassificationResult.document_id.in_(doc_ids))
+    )
+    doc_type_map: dict[str, str] = {
+        str(r.document_id): r.doc_type.value for r in cls_result.scalars()
+    }
+
+    # Split into CI products and PL products
+    ci_products: list = []
+    pl_products: list = []
     for p in all_products:
-        key = _product_key(p)
-        if key is None:
-            continue
-        doc_id = str(p.document_id)
-        if key not in by_key:
-            by_key[key] = {}
-        by_key[key].setdefault(doc_id, []).append(p)
+        dt = doc_type_map.get(str(p.document_id), "")
+        if dt == DocumentType.COMMERCIAL_INVOICE.value:
+            ci_products.append(p)
+        elif dt == DocumentType.PACKING_LIST.value:
+            pl_products.append(p)
 
-    group_mismatches: list[dict] = []
+    # Comparison only makes sense when both CI and PL have products
+    if not ci_products or not pl_products:
+        return [], []
+
+    hs_mismatches: list[dict] = []
     unmatched_products: list[dict] = []
+    matched_pl_ids: set[uuid.UUID] = set()
 
-    for (key_type, key_value), by_doc in by_key.items():
-        if len(by_doc) < 2:
-            # Product exists in only one document; other documents with products don't have it
-            present_doc_id = next(iter(by_doc))
-            missing_in = [
-                uuid.UUID(d) for d in docs_with_products if d != present_doc_id
-            ]
-            if missing_in:
-                product = by_doc[present_doc_id][0]
-                unit = str(product.unit_price).strip() if product.unit_price is not None else None
-                if unit and unit.lower() in ("none", "null", ""):
-                    unit = None
-                unmatched_products.append({
-                    "document_id": product.document_id,
-                    "product_id": product.id,
-                    "product_name": product.product_name,
-                    "hs_code": product.existing_hs_code,
-                    "quantity": str(product.quantity).strip() if product.quantity is not None else None,
-                    "unit_price": unit,
-                    "currency": product.currency,
-                    "missing_in": missing_in,
-                })
+    for ci_p in ci_products:
+        pl_p = _best_match_in_list(ci_p, pl_products)
+
+        if pl_p is None:
+            # CI product has no counterpart in PL
+            unmatched_products.append({
+                "document_id": ci_p.document_id,
+                "product_id": ci_p.id,
+                "product_name": ci_p.product_name,
+                "hs_code": ci_p.existing_hs_code,
+                "quantity": str(ci_p.quantity).strip() if ci_p.quantity else None,
+                "unit_price": str(ci_p.unit_price).strip() if ci_p.unit_price else None,
+                "currency": ci_p.currency,
+                "missing_in": [pl_p2.document_id for pl_p2 in pl_products[:1]],
+            })
             continue
 
-        # Product present in 2+ documents — compare field by field
-        field_mismatches: list[dict] = []
+        matched_pl_ids.add(pl_p.id)
 
-        for field_attr, display_label, severity in _PRODUCT_COMPARE_FIELDS:
-            per_doc_values: list[dict] = []
-            for doc_id, prods in by_doc.items():
-                p = prods[0]
-                raw = getattr(p, field_attr, None)
-                if raw is None:
-                    continue
-                val = str(raw).strip()
-                if not val or val.lower() in ("none", "null", ""):
-                    continue
-                per_doc_values.append({
-                    "document_id": p.document_id,
-                    "product_id": p.id,
-                    "product_name": p.product_name,
-                    "value": val,
-                })
+        # Compare HS codes
+        ci_hs = _norm_hs(ci_p.existing_hs_code)
+        pl_hs = _norm_hs(pl_p.existing_hs_code)
 
-            if len(per_doc_values) < 2:
-                continue
-
-            first = per_doc_values[0]["value"]
-            all_match = all(
-                _product_values_match(field_attr, first, v["value"])
-                for v in per_doc_values[1:]
-            )
-            if all_match:
-                continue
-
-            field_mismatches.append({
-                "field_name": field_attr,
-                "display_label": display_label,
-                "severity": severity,
-                "values": per_doc_values,
+        # Only flag when both sides have an HS code and they differ
+        if ci_hs and pl_hs and ci_hs != pl_hs:
+            hs_mismatches.append({
+                "product_key": ci_p.product_name or ci_hs,
+                "hs_code": ci_p.existing_hs_code,
+                "field_mismatches": [{
+                    "field_name": "existing_hs_code",
+                    "display_label": "HS Code",
+                    "severity": "error",
+                    "values": [
+                        {
+                            "document_id": ci_p.document_id,
+                            "product_id": ci_p.id,
+                            "product_name": ci_p.product_name,
+                            "value": ci_p.existing_hs_code,
+                        },
+                        {
+                            "document_id": pl_p.document_id,
+                            "product_id": pl_p.id,
+                            "product_name": pl_p.product_name,
+                            "value": pl_p.existing_hs_code,
+                        },
+                    ],
+                }],
             })
 
-        if not field_mismatches:
-            continue
+    # PL products that had no CI counterpart
+    for pl_p in pl_products:
+        if pl_p.id not in matched_pl_ids:
+            unmatched_products.append({
+                "document_id": pl_p.document_id,
+                "product_id": pl_p.id,
+                "product_name": pl_p.product_name,
+                "hs_code": pl_p.existing_hs_code,
+                "quantity": str(pl_p.quantity).strip() if pl_p.quantity else None,
+                "unit_price": str(pl_p.unit_price).strip() if pl_p.unit_price else None,
+                "currency": pl_p.currency,
+                "missing_in": [ci_p2.document_id for ci_p2 in ci_products[:1]],
+            })
 
-        sample = list(by_doc.values())[0][0]
-        group_mismatches.append({
-            "product_key": key_value,
-            "hs_code": sample.existing_hs_code if key_type == "hs" else None,
-            "field_mismatches": field_mismatches,
-        })
-
-    return group_mismatches, unmatched_products
+    return hs_mismatches, unmatched_products
