@@ -61,6 +61,40 @@ _PRODUCT_PER_ITEM_MAP: list[tuple[str, str, str]] = [
 ]
 
 
+# ISO 3166-1 alpha-2 (and common alpha-3) country → ISO 4217 currency
+_COUNTRY_CURRENCY: dict[str, str] = {
+    # British Isles
+    "GB": "GBP", "GBR": "GBP",
+    # United States
+    "US": "USD", "USA": "USD",
+    # Eurozone
+    "DE": "EUR", "FRA": "EUR", "FR": "EUR", "IT": "EUR", "ES": "EUR",
+    "NL": "EUR", "BE": "EUR", "AT": "EUR", "FI": "EUR", "PT": "EUR",
+    "GR": "EUR", "IE": "EUR", "LU": "EUR", "CY": "EUR", "MT": "EUR",
+    "SK": "EUR", "SI": "EUR", "EE": "EUR", "LV": "EUR", "LT": "EUR",
+    "HR": "EUR",
+    # Other European
+    "BG": "BGN", "BGR": "BGN",
+    "RO": "RON", "HU": "HUF", "PL": "PLN", "CZ": "CZK",
+    "DK": "DKK", "SE": "SEK", "NO": "NOK", "CH": "CHF",
+    "TR": "TRY",
+    # Asia / Pacific
+    "CN": "CNY", "JP": "JPY", "IN": "INR", "AU": "AUD",
+    "SG": "SGD", "KR": "KRW", "HK": "HKD",
+    # Americas
+    "CA": "CAD", "MX": "MXN", "BR": "BRL",
+    # Middle East / Africa
+    "AE": "AED", "SA": "SAR", "ZA": "ZAR",
+}
+
+
+def _currency_for_country(country_code: str | None) -> str | None:
+    """Return the ISO 4217 currency for a given country code, or None if unknown."""
+    if not country_code:
+        return None
+    return _COUNTRY_CURRENCY.get(country_code.strip().upper())
+
+
 _EXT_MIME: dict[str, str] = {
     ".pdf":  "application/pdf",
     ".png":  "image/png",
@@ -141,6 +175,13 @@ async def process_classification_result(
     products: list[DocumentProduct] = []
     seen_field_names: set[str] = set()
 
+    # Derive destination-country currency once — used to override extracted currency
+    dest_country = (
+        shipment_data.get("destination_country")
+        or next((p.get("destination_country") for p in products_data if p.get("destination_country")), None)
+    )
+    dest_currency = _currency_for_country(dest_country)
+
     # ── Shipment-level fields ─────────────────────────────────────────────────
     for api_key, field_name, ftype in _SHIPMENT_FIELD_MAP:
         raw = shipment_data.get(api_key)
@@ -149,6 +190,9 @@ async def process_classification_result(
         value_raw = str(raw).strip()
         if not value_raw or value_raw == "None":
             continue
+        # Override extracted currency with the destination country's currency
+        if field_name == "currency" and dest_currency:
+            value_raw = dest_currency
         ef = _make_field(document_id, shipment_id, org_id, field_name, value_raw, ftype)
         db.add(ef)
         extracted.append(ef)
@@ -185,6 +229,11 @@ async def process_classification_result(
 
     # ── DocumentProduct rows ──────────────────────────────────────────────────
     for prod in products_data:
+        dest = prod.get("destination_country")
+        # Currency is determined by the destination country when possible.
+        # This ensures values are always expressed in the importing country's currency.
+        currency = _currency_for_country(dest) or prod.get("currency")
+
         dp = DocumentProduct(
             document_id=document_id,
             shipment_id=shipment_id,
@@ -195,9 +244,9 @@ async def process_classification_result(
             description=prod.get("description"),
             quantity=prod.get("quantity"),
             unit_price=str(prod["unit_price"]) if prod.get("unit_price") is not None else None,
-            currency=prod.get("currency"),
+            currency=currency,
             origin_country=prod.get("origin_country"),
-            destination_country=prod.get("destination_country"),
+            destination_country=dest,
             existing_hs_code=prod.get("existing_hs_code"),
             missing_required_fields=prod.get("missing_required_fields") or prod.get("missing_fields"),
             is_ready_to_classify=bool(prod.get("is_ready_to_classify", False)),
