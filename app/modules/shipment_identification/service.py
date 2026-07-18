@@ -422,11 +422,15 @@ async def update_shipment_status(
 
 
 async def delete_shipment(db: AsyncSession, org_id: uuid.UUID, shipment_id: uuid.UUID) -> None:
-    from sqlalchemy import delete as sql_delete, update as sql_update
+    from sqlalchemy import delete as sql_delete
     from app.modules.flags.models import Flag, FlagResolution
     from app.modules.field_extraction.models import ExtractedField
     from app.modules.intel.models import IntelMatch
     from app.modules.classification_api.models import DocumentProduct
+    from app.modules.document_classification.models import ClassificationResult
+    from app.modules.ocr_processing.models import OcrResult
+    from app.modules.document_storage.models import DocumentVersion
+    from app.modules.document_storage.storage import storage
 
     result = await db.execute(
         select(Shipment).where(Shipment.id == shipment_id, Shipment.org_id == org_id)
@@ -435,25 +439,24 @@ async def delete_shipment(db: AsyncSession, org_id: uuid.UUID, shipment_id: uuid
     if not shipment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shipment not found")
 
-    # Unlink documents (clear their shipment_id, keep the documents themselves)
-    await db.execute(
-        sql_update(Document)
-        .where(Document.shipment_id == shipment_id)
-        .values(shipment_id=None)
+    # Collect all documents linked to this shipment (need file_keys before deleting)
+    docs_result = await db.execute(
+        select(Document).where(Document.shipment_id == shipment_id)
     )
-    # Nullify shipment_id on extracted fields
-    await db.execute(
-        sql_update(ExtractedField)
-        .where(ExtractedField.shipment_id == shipment_id)
-        .values(shipment_id=None)
-    )
-    # Nullify shipment_id on document products (FK to shipments, no cascade)
-    await db.execute(
-        sql_update(DocumentProduct)
-        .where(DocumentProduct.shipment_id == shipment_id)
-        .values(shipment_id=None)
-    )
-    # Delete flag resolutions first (FK to flags)
+    docs = list(docs_result.scalars())
+    doc_ids = [d.id for d in docs]
+
+    # ── Delete document-level rows in dependency order ────────────────────────
+    if doc_ids:
+        await db.execute(sql_delete(DocumentProduct).where(DocumentProduct.document_id.in_(doc_ids)))
+        await db.execute(sql_delete(ExtractedField).where(ExtractedField.document_id.in_(doc_ids)))
+        await db.execute(sql_delete(ClassificationResult).where(ClassificationResult.document_id.in_(doc_ids)))
+        await db.execute(sql_delete(OcrResult).where(OcrResult.document_id.in_(doc_ids)))
+        await db.execute(sql_delete(DocumentVersion).where(DocumentVersion.document_id.in_(doc_ids)))
+        await db.execute(sql_delete(ShipmentDocument).where(ShipmentDocument.document_id.in_(doc_ids)))
+        await db.execute(sql_delete(Document).where(Document.id.in_(doc_ids)))
+
+    # ── Delete shipment-level rows ────────────────────────────────────────────
     flag_ids_result = await db.execute(
         select(Flag.id).where(Flag.shipment_id == shipment_id)
     )
@@ -461,10 +464,15 @@ async def delete_shipment(db: AsyncSession, org_id: uuid.UUID, shipment_id: uuid
     if flag_ids:
         await db.execute(sql_delete(FlagResolution).where(FlagResolution.flag_id.in_(flag_ids)))
     await db.execute(sql_delete(Flag).where(Flag.shipment_id == shipment_id))
-    # Delete intel matches
     await db.execute(sql_delete(IntelMatch).where(IntelMatch.shipment_id == shipment_id))
-    # Delete shipment join tables
     await db.execute(sql_delete(ShipmentDocument).where(ShipmentDocument.shipment_id == shipment_id))
     await db.execute(sql_delete(ShipmentReference).where(ShipmentReference.shipment_id == shipment_id))
     await db.execute(sql_delete(Shipment).where(Shipment.id == shipment_id))
     await db.commit()
+
+    # ── Delete files from object storage (after commit so DB is clean on failure) ──
+    for doc in docs:
+        try:
+            storage.delete_file(doc.file_key)
+        except Exception:
+            pass
