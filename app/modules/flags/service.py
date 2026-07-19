@@ -240,12 +240,23 @@ async def create_missing_document_flags(
             present_types.add(cr.doc_type.value.upper())
 
     for expected_type in expected:
-        if expected_type.upper() in present_types:
-            continue
-
         label = DOC_TYPE_LABELS.get(expected_type.upper(), expected_type)
 
-        # Deduplication
+        if expected_type.upper() in present_types:
+            # Auto-resolve any open "Missing document" flag for this type
+            open_flags = await db.execute(
+                select(Flag).where(
+                    Flag.shipment_id == shipment_id,
+                    Flag.flag_type == FlagType.MISSING_DOCUMENT,
+                    Flag.title == f"Missing document: {label}",
+                    Flag.status == FlagStatus.OPEN,
+                )
+            )
+            for flag in open_flags.scalars():
+                flag.status = FlagStatus.RESOLVED
+            continue
+
+        # Deduplication — skip if open flag already exists
         dup = await db.execute(
             select(Flag).where(
                 Flag.shipment_id == shipment_id,
