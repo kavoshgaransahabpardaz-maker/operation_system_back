@@ -424,7 +424,7 @@ async def update_shipment_status(
 async def delete_shipment(db: AsyncSession, org_id: uuid.UUID, shipment_id: uuid.UUID) -> None:
     from sqlalchemy import delete as sql_delete
     from app.modules.flags.models import Flag, FlagResolution
-    from app.modules.field_extraction.models import ExtractedField
+    from app.modules.field_extraction.models import ExtractedField, ProductRecord
     from app.modules.intel.models import IntelMatch
     from app.modules.classification_api.models import DocumentProduct
     from app.modules.document_classification.models import ClassificationResult
@@ -457,6 +457,7 @@ async def delete_shipment(db: AsyncSession, org_id: uuid.UUID, shipment_id: uuid
         await db.execute(sql_delete(Document).where(Document.id.in_(doc_ids)))
 
     # ── Delete shipment-level rows ────────────────────────────────────────────
+    await db.execute(sql_delete(ProductRecord).where(ProductRecord.shipment_id == shipment_id))
     flag_ids_result = await db.execute(
         select(Flag.id).where(Flag.shipment_id == shipment_id)
     )
