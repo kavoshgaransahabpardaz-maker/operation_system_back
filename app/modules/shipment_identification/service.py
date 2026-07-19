@@ -430,7 +430,7 @@ async def delete_shipment(db: AsyncSession, org_id: uuid.UUID, shipment_id: uuid
     from app.modules.document_classification.models import ClassificationResult
     from app.modules.ocr_processing.models import OcrResult
     from app.modules.document_storage.models import DocumentVersion
-    from app.modules.document_storage.storage import storage
+    from app.core import storage
 
     result = await db.execute(
         select(Shipment).where(Shipment.id == shipment_id, Shipment.org_id == org_id)
