@@ -482,34 +482,49 @@ async def detect_product_mismatches(
 
         matched_pl_ids.add(pl_p.id)
 
-        # Compare HS codes
+        field_mismatches: list[dict] = []
+
+        def _check(field_attr: str, label: str, severity: str) -> None:
+            a = (getattr(ci_p, field_attr) or "").strip()
+            b = (getattr(pl_p, field_attr) or "").strip()
+            if a and b and a.lower() != b.lower():
+                field_mismatches.append({
+                    "field_name": field_attr,
+                    "display_label": label,
+                    "severity": severity,
+                    "values": [
+                        {"document_id": ci_p.document_id, "product_id": ci_p.id,
+                         "product_name": ci_p.product_name, "value": a},
+                        {"document_id": pl_p.document_id, "product_id": pl_p.id,
+                         "product_name": pl_p.product_name, "value": b},
+                    ],
+                })
+
+        # HS code: normalise before comparing
         ci_hs = _norm_hs(ci_p.existing_hs_code)
         pl_hs = _norm_hs(pl_p.existing_hs_code)
-
-        # Only flag when both sides have an HS code and they differ
         if ci_hs and pl_hs and ci_hs != pl_hs:
+            field_mismatches.append({
+                "field_name": "existing_hs_code",
+                "display_label": "HS Code",
+                "severity": "error",
+                "values": [
+                    {"document_id": ci_p.document_id, "product_id": ci_p.id,
+                     "product_name": ci_p.product_name, "value": ci_p.existing_hs_code},
+                    {"document_id": pl_p.document_id, "product_id": pl_p.id,
+                     "product_name": pl_p.product_name, "value": pl_p.existing_hs_code},
+                ],
+            })
+
+        # Lot number and expiry date must agree between CI and PL
+        _check("lot_number",   "Lot Number",   "error")
+        _check("expiry_date",  "Expiry Date",  "error")
+
+        if field_mismatches:
             hs_mismatches.append({
-                "product_key": ci_p.product_name or ci_hs,
+                "product_key": ci_p.product_name or ci_hs or "Unknown",
                 "hs_code": ci_p.existing_hs_code,
-                "field_mismatches": [{
-                    "field_name": "existing_hs_code",
-                    "display_label": "HS Code",
-                    "severity": "error",
-                    "values": [
-                        {
-                            "document_id": ci_p.document_id,
-                            "product_id": ci_p.id,
-                            "product_name": ci_p.product_name,
-                            "value": ci_p.existing_hs_code,
-                        },
-                        {
-                            "document_id": pl_p.document_id,
-                            "product_id": pl_p.id,
-                            "product_name": pl_p.product_name,
-                            "value": pl_p.existing_hs_code,
-                        },
-                    ],
-                }],
+                "field_mismatches": field_mismatches,
             })
 
     # PL products that had no CI counterpart

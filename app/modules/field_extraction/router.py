@@ -36,10 +36,18 @@ class DocumentProductOut(BaseModel):
     description: str | None
     quantity: str | None
     unit_price: str | None
+    line_total: str | None
     currency: str | None
+    ship_from: str | None
     origin_country: str | None
     destination_country: str | None
     existing_hs_code: str | None
+    existing_national_code: str | None
+    existing_national_code_jurisdiction: str | None
+    lot_number: str | None
+    expiry_date: str | None
+    net_weight: str | None
+    gross_weight: str | None
     missing_required_fields: list | None
     is_ready_to_classify: bool
     created_at: datetime

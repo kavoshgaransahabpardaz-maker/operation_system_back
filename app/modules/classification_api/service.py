@@ -34,13 +34,32 @@ _API_TIMEOUT = 120.0  # seconds
 
 # Shipment-level fields: (api_key → (field_name, field_type))
 _SHIPMENT_FIELD_MAP: list[tuple[str, str, str]] = [
-    ("invoice_number", "reference", FieldType.STRING.value),
-    ("invoice_date", "invoice_date", FieldType.DATE.value),
-    ("currency", "currency", FieldType.ISO_CODE.value),
-    ("incoterms", "incoterm", FieldType.ISO_CODE.value),
-    ("port_of_loading", "place_of_loading", FieldType.STRING.value),
-    ("port_of_discharge", "port_of_discharge", FieldType.STRING.value),
-    ("total_value", "invoice_value", FieldType.DECIMAL.value),
+    # Identifiers
+    ("invoice_number",            "reference",        FieldType.STRING.value),
+    ("packing_list_number",       "local_reference",  FieldType.STRING.value),
+    # Dates
+    ("invoice_date",              "invoice_date",     FieldType.DATE.value),
+    # Trade terms
+    ("currency",                  "currency",         FieldType.ISO_CODE.value),
+    ("incoterms",                 "incoterm",         FieldType.ISO_CODE.value),
+    # Logistics
+    ("port_of_loading",           "place_of_loading", FieldType.STRING.value),
+    ("port_of_discharge",         "port_of_discharge", FieldType.STRING.value),
+    # Financials
+    ("total_value",               "invoice_value",    FieldType.DECIMAL.value),
+    ("freight_value",             "freight_value",    FieldType.DECIMAL.value),
+    ("insurance_value",           "insurance_value",  FieldType.DECIMAL.value),
+    ("vat_amount",                "vat_value",        FieldType.DECIMAL.value),
+    # Weights & counts
+    ("net_weight",                "net_weight",       FieldType.DECIMAL.value),
+    ("gross_weight",              "gross_weight",     FieldType.DECIMAL.value),
+    ("total_packages",            "total_packages",   FieldType.DECIMAL.value),
+    # Entities (IDs)
+    ("vat_number",                "vat_number_seller", FieldType.STRING.value),
+    ("eori_number",               "eori_number",      FieldType.STRING.value),
+    ("rex_number",                "rex_number_seller", FieldType.STRING.value),
+    # Compliance
+    ("self_certification_statement", "preferential_duty", FieldType.STRING.value),
 ]
 
 # Per-product fields extracted once per document (first non-null wins for dedup fields)
@@ -198,6 +217,22 @@ async def process_classification_result(
         extracted.append(ef)
         seen_field_names.add(field_name)
 
+    # ── Consignor / Consignee (name + address → party_shipper / party_consignee) ──
+    for name_key, addr_key, field_name in [
+        ("consignor_name", "consignor_address", "party_shipper"),
+        ("consignee_name", "consignee_address", "party_consignee"),
+    ]:
+        if field_name in seen_field_names:
+            continue
+        name = (shipment_data.get(name_key) or "").strip()
+        addr = (shipment_data.get(addr_key) or "").strip()
+        combined = "\n".join(filter(None, [name, addr]))
+        if combined:
+            ef = _make_field(document_id, shipment_id, org_id, field_name, combined, FieldType.STRING.value)
+            db.add(ef)
+            extracted.append(ef)
+            seen_field_names.add(field_name)
+
     # ── Per-product common fields (first non-null per field_name wins) ────────
     for api_key, field_name, ftype in _PRODUCT_COMMON_MAP:
         if field_name in seen_field_names:
@@ -234,6 +269,10 @@ async def process_classification_result(
         # This ensures values are always expressed in the importing country's currency.
         currency = _currency_for_country(dest) or prod.get("currency")
 
+        def _str(v) -> str | None:
+            s = str(v).strip() if v is not None else None
+            return s if s and s.lower() not in ("none", "null", "0.0", "0.00", "0.000") else None
+
         dp = DocumentProduct(
             document_id=document_id,
             shipment_id=shipment_id,
@@ -242,12 +281,20 @@ async def process_classification_result(
             material=prod.get("material"),
             intended_use=prod.get("intended_use"),
             description=prod.get("description"),
-            quantity=prod.get("quantity"),
-            unit_price=str(prod["unit_price"]) if prod.get("unit_price") is not None else None,
+            quantity=_str(prod.get("quantity")),
+            unit_price=_str(prod.get("unit_price")),
+            line_total=_str(prod.get("line_total")),
             currency=currency,
+            ship_from=prod.get("ship_from"),
             origin_country=prod.get("origin_country"),
             destination_country=dest,
             existing_hs_code=prod.get("existing_hs_code"),
+            existing_national_code=prod.get("existing_national_code"),
+            existing_national_code_jurisdiction=prod.get("existing_national_code_jurisdiction"),
+            lot_number=prod.get("lot_number"),
+            expiry_date=_str(prod.get("expiry_date")),
+            net_weight=_str(prod.get("net_weight")),
+            gross_weight=_str(prod.get("gross_weight")),
             missing_required_fields=prod.get("missing_required_fields") or prod.get("missing_fields"),
             is_ready_to_classify=bool(prod.get("is_ready_to_classify", False)),
         )
