@@ -1,7 +1,7 @@
 """Add new fields to document_products from updated classification API
 
-Revision ID: a1b2c3d4e5f6
-Revises: f2a3b4c5d6e7
+Revision ID: b6c7d8e9f0a1
+Revises: 4e8f1b2c3d9a
 Create Date: 2026-07-19
 
 """
@@ -10,8 +10,8 @@ from typing import Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "a1b2c3d4e5f6"
-down_revision: Union[str, None] = "f2a3b4c5d6e7"
+revision: str = "b6c7d8e9f0a1"
+down_revision: Union[str, None] = "4e8f1b2c3d9a"
 branch_labels = None
 depends_on = None
 
