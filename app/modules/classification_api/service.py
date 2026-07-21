@@ -27,7 +27,7 @@ from app.modules.shipment_identification.models import (
 
 logger = logging.getLogger(__name__)
 
-_CLASSIFICATION_API_URL = "http://94.101.185.122:8000/api/v1/classification/extract"
+_CLASSIFICATION_API_URL = "https://api.stage.veritariffai.co/api/v1/classification/extract"
 _API_TIMEOUT = 120.0  # seconds
 
 # ── Field mapping ─────────────────────────────────────────────────────────────
