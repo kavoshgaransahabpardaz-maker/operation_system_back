@@ -57,6 +57,10 @@ class FieldName(str, enum.Enum):
     LOCAL_REFERENCE = "local_reference"
     POINT_OF_ENTRY = "point_of_entry"
 
+    # ── Additional financials ─────────────────────────────────────────────────
+    FOB_VALUE = "fob_value"                   # Free On Board value
+    WEIGHT_UNIT = "weight_unit"               # unit for weight fields (kg, lbs, etc.)
+
 
 class ExtractedFieldOut(BaseModel):
     id: uuid.UUID

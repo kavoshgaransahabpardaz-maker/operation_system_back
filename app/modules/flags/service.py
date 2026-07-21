@@ -35,6 +35,8 @@ FIELD_NAME_LABELS: dict[str, str] = {
     "quantity": "Quantity",
     "reference": "Reference Number",
     "shipment_date": "Shipment Date",
+    "fob_value": "FOB Value",
+    "weight_unit": "Weight Unit",
 }
 
 REQUIRED_FIELDS_BY_DOC_TYPE: dict[str, list[str]] = {

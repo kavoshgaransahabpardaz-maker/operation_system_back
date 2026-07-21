@@ -58,6 +58,10 @@ _SHIPMENT_FIELD_MAP: list[tuple[str, str, str]] = [
     ("vat_number",                "vat_number_seller", FieldType.STRING.value),
     ("eori_number",               "eori_number",      FieldType.STRING.value),
     ("rex_number",                "rex_number_seller", FieldType.STRING.value),
+    # Additional financials
+    ("fob_value",                 "fob_value",        FieldType.DECIMAL.value),
+    # Units
+    ("weight_unit",               "weight_unit",      FieldType.STRING.value),
     # Compliance
     ("self_certification_statement", "preferential_duty", FieldType.STRING.value),
 ]

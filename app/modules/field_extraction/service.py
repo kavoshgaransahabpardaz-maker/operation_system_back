@@ -71,6 +71,9 @@ UNIVERSAL_FIELDS: list[FieldName] = [
     FieldName.REFERENCE,
     FieldName.LOCAL_REFERENCE,
     FieldName.POINT_OF_ENTRY,
+    # Additional financials
+    FieldName.FOB_VALUE,
+    FieldName.WEIGHT_UNIT,
 ]
 
 # Fields checked for cross-document consistency within a shipment
@@ -99,6 +102,8 @@ MISMATCH_CHECK_FIELDS: set[str] = {
     FieldName.EORI_NUMBER.value,
     # Dates
     FieldName.INVOICE_DATE.value,
+    # Additional financials
+    FieldName.FOB_VALUE.value,
     # HS_CODE omitted — compared at product level via DocumentProduct.existing_hs_code
 }
 
