@@ -661,7 +661,7 @@ async def update_source_preference(
 
 @router.get("/intel/jobs", response_model=list[IntelJobOut])
 async def list_jobs(
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=1000),
     status_filter: str | None = Query(None, alias="status"),
     job_type: str | None = Query(None),
     current_user: User = Depends(require_admin),

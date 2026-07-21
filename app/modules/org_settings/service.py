@@ -23,6 +23,10 @@ async def get_settings(org_id: uuid.UUID, db: AsyncSession) -> OrgSettings:
         weight_qty_tolerance_pct=0.5,
         value_tolerance_pct=1.0,
         name_match_threshold=0.93,
+        doc_organization_by="shipment",
+        auto_fix_threshold=0.95,
+        email_critical_alerts=True,
+        ocr_languages="eng",
     )
 
 
