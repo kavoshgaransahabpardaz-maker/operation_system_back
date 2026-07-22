@@ -16,10 +16,16 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "notification_preferences",
-        sa.Column("digest_hour", sa.Integer(), nullable=False, server_default="8"),
-    )
+    from sqlalchemy import text
+    conn = op.get_bind()
+    cols = [row[0] for row in conn.execute(text(
+        "SELECT column_name FROM information_schema.columns WHERE table_name='notification_preferences'"
+    ))]
+    if "digest_hour" not in cols:
+        op.add_column(
+            "notification_preferences",
+            sa.Column("digest_hour", sa.Integer(), nullable=False, server_default="8"),
+        )
 
 
 def downgrade() -> None:

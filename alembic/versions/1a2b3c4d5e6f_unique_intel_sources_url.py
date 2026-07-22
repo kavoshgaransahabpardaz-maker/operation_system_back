@@ -15,7 +15,13 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_unique_constraint("uq_intel_sources_url", "intel_sources", ["url"])
+    from sqlalchemy import inspect, text
+    conn = op.get_bind()
+    indexes = [row[2] for row in conn.execute(text(
+        "SELECT indexname, indexname, indexname FROM pg_indexes WHERE tablename='intel_sources'"
+    ))]
+    if "uq_intel_sources_url" not in indexes:
+        op.create_unique_constraint("uq_intel_sources_url", "intel_sources", ["url"])
 
 
 def downgrade() -> None:
