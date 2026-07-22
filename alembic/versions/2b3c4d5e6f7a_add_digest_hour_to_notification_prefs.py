@@ -1,17 +1,16 @@
 """Add digest_hour to notification_preferences for daily email digest scheduling
 
-Revision ID: b2c3d4e5f6a7
-Revises: a1b2c3d4e5f6
+Revision ID: 2b3c4d5e6f7a
+Revises: 1a2b3c4d5e6f
 Create Date: 2026-07-22
 
 """
 from typing import Union
-
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "b2c3d4e5f6a7"
-down_revision: Union[str, None] = "a1b2c3d4e5f6"
+revision: str = "2b3c4d5e6f7a"
+down_revision: Union[str, None] = "1a2b3c4d5e6f"
 branch_labels = None
 depends_on = None
 

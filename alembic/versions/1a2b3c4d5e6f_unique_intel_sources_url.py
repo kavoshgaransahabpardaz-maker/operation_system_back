@@ -1,17 +1,15 @@
 """Add unique constraint on intel_sources.url to prevent duplicate sources
 
-Revision ID: a1b2c3d4e5f6
-Revises: f2a3b4c5d6e7
+Revision ID: 1a2b3c4d5e6f
+Revises: c7d8e9f0a1b2
 Create Date: 2026-07-22
 
 """
 from typing import Union
-
-import sqlalchemy as sa
 from alembic import op
 
-revision: str = "a1b2c3d4e5f6"
-down_revision: Union[str, None] = "f2a3b4c5d6e7"
+revision: str = "1a2b3c4d5e6f"
+down_revision: Union[str, None] = "c7d8e9f0a1b2"
 branch_labels = None
 depends_on = None
 
