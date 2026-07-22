@@ -16,6 +16,7 @@ from app.modules.org_settings.router import router as org_settings_router
 from app.modules.intel.router import router as intel_router
 from app.modules.admin.router import router as admin_router
 from app.modules.classification_api.router import router as hs_genie_router
+from app.modules.superadmin.router import router as sa_router
 
 
 @asynccontextmanager
@@ -58,6 +59,7 @@ app.include_router(org_settings_router, prefix=API_PREFIX)
 app.include_router(intel_router, prefix=API_PREFIX)
 app.include_router(admin_router, prefix=API_PREFIX)
 app.include_router(hs_genie_router, prefix=API_PREFIX)
+app.include_router(sa_router, prefix=API_PREFIX)
 
 
 @app.get("/health")
