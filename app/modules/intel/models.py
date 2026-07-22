@@ -371,6 +371,7 @@ class NotificationPreference(Base):
         JSONB, nullable=False, default=lambda: ["in_app"]
     )  # in_app/email
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    digest_hour: Mapped[int] = mapped_column(Integer, nullable=False, default=8)  # UTC hour 0-23 for daily digest
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

@@ -292,6 +292,7 @@ class NotificationPreferenceOut(BaseModel):
     event_types: list[str]
     delivery_channels: list[str]
     is_active: bool
+    digest_hour: int
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -302,6 +303,7 @@ class NotificationPreferenceUpdate(BaseModel):
     event_types: list[str] | None = None
     delivery_channels: list[str] | None = None
     is_active: bool | None = None
+    digest_hour: int | None = None
 
 
 # ---------------------------------------------------------------------------

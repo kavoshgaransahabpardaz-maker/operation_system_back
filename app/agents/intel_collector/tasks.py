@@ -752,6 +752,215 @@ def rematch_org_articles(org_id: str):
 
 
 # ---------------------------------------------------------------------------
+# send_daily_digest_task — hourly beat, dispatches to matching users
+# ---------------------------------------------------------------------------
+
+@celery_app.task(name="tasks.send_daily_digest", queue="intel_notify")
+def send_daily_digest_task():
+    """
+    Run every hour. For each active user whose digest_hour matches the current
+    UTC hour, fetch articles matched to their org in the last 24 h, build an
+    HTML digest email, and send it via SMTP.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import select
+    from app.core.database import AsyncSessionLocal
+    from app.core.email import send_email
+    from app.modules.intel.models import (
+        AlertDelivery,
+        IntelArticle,
+        IntelEnrichment,
+        IntelMatch,
+        NotificationPreference,
+    )
+    from app.modules.user_management.models import User
+
+    current_hour = datetime.now(timezone.utc).hour
+
+    async def _run():
+        async with AsyncSessionLocal() as db:
+            # Find all prefs due this hour
+            prefs_result = await db.execute(
+                select(NotificationPreference).where(
+                    NotificationPreference.is_active == True,
+                    NotificationPreference.digest_hour == current_hour,
+                )
+            )
+            prefs = list(prefs_result.scalars())
+            if not prefs:
+                return
+
+            since = datetime.now(timezone.utc) - timedelta(hours=24)
+
+            for pref in prefs:
+                if "email" not in (pref.delivery_channels or []):
+                    continue
+
+                # Load the user
+                user_result = await db.execute(
+                    select(User).where(User.id == pref.user_id)
+                )
+                user = user_result.scalar_one_or_none()
+                if not user or not user.is_active:
+                    continue
+
+                # Fetch matches for this org in the last 24 h
+                matches_result = await db.execute(
+                    select(IntelMatch)
+                    .where(
+                        IntelMatch.org_id == pref.org_id,
+                        IntelMatch.created_at >= since,
+                    )
+                    .order_by(IntelMatch.created_at.desc())
+                )
+                matches = list(matches_result.scalars())
+                if not matches:
+                    continue
+
+                # Collect unique article IDs
+                article_ids = list({m.article_id for m in matches})
+
+                # Load articles
+                articles_result = await db.execute(
+                    select(IntelArticle).where(IntelArticle.id.in_(article_ids))
+                )
+                articles = list(articles_result.scalars())
+                articles_by_id = {a.id: a for a in articles}
+
+                # Load enrichments
+                enrichments_result = await db.execute(
+                    select(IntelEnrichment).where(IntelEnrichment.article_id.in_(article_ids))
+                )
+                enrichments_by_article = {e.article_id: e for e in enrichments_result.scalars()}
+
+                # Filter by impact score and event types
+                filtered = []
+                for art in articles:
+                    enrichment = enrichments_by_article.get(art.id)
+                    impact = (enrichment.impact_score if enrichment else None) or 0
+                    if impact < pref.min_impact_score:
+                        continue
+                    if pref.event_types and enrichment:
+                        if enrichment.event_type not in pref.event_types:
+                            continue
+                    filtered.append((art, enrichment))
+
+                if not filtered:
+                    continue
+
+                # Sort by impact score desc
+                filtered.sort(
+                    key=lambda t: (t[1].impact_score if t[1] else 0) or 0,
+                    reverse=True,
+                )
+
+                subject, html = _build_digest_email(user, filtered)  # list of (article, enrichment)
+                sent = send_email(user.email, subject, html)
+
+                # Log delivery
+                delivery = AlertDelivery(
+                    org_id=pref.org_id,
+                    article_id=None,
+                    delivery_type="email_digest",
+                    subject=subject,
+                    body_summary=f"{len(filtered)} articles sent to {user.email}",  # filtered = list[(article, enrichment)]
+                    status="sent" if sent else "failed",
+                )
+                db.add(delivery)
+
+            await db.commit()
+
+    try:
+        _run_async(_run())
+        logger.info("send_daily_digest_task: completed for hour %d UTC", current_hour)
+    except Exception as exc:
+        logger.error("send_daily_digest_task failed: %s", exc)
+
+
+def _build_digest_email(user: "User", items: list) -> tuple[str, str]:
+    """Build subject + HTML body for the daily digest. items = list of (IntelArticle, IntelEnrichment|None)."""
+    from datetime import date
+
+    today = date.today().strftime("%B %d, %Y")
+    subject = f"Your Trade Intelligence Digest — {today}"
+
+    IMPACT_COLORS = {5: "#dc2626", 4: "#ea580c", 3: "#ca8a04", 2: "#2563eb", 1: "#64748b"}
+    IMPACT_LABELS = {5: "Critical", 4: "High", 3: "Moderate", 2: "Minor", 1: "Low"}
+
+    def article_card(art, enrichment) -> str:
+        impact = (enrichment.impact_score if enrichment else None)
+        event_type = (enrichment.event_type if enrichment else None) or ""
+        summary = (enrichment.summary if enrichment else None) or ""
+        color = IMPACT_COLORS.get(impact, "#64748b") if impact else "#64748b"
+        label = IMPACT_LABELS.get(impact, "") if impact else ""
+        url = art.url or "#"
+        date_str = art.published_at.strftime("%b %d") if art.published_at else ""
+        source_line = f"<span style='color:#64748b;font-size:12px;'>{date_str}{' · ' if date_str and event_type else ''}{event_type.replace('_', ' ').title()}</span>"
+        badge = f"<span style='background:{color};color:#fff;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600;'>{label}</span>" if label else ""
+        summary_html = f"<p style='font-size:13px;color:#475569;margin:0;line-height:1.5;'>{summary[:300]}{'…' if len(summary) > 300 else ''}</p>" if summary else ""
+        return f"""
+        <div style='border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin-bottom:12px;background:#fff;'>
+          <div style='display:flex;align-items:center;gap:8px;margin-bottom:6px;'>
+            {badge}
+            {source_line}
+          </div>
+          <a href='{url}' style='font-size:15px;font-weight:600;color:#0f172a;text-decoration:none;line-height:1.4;display:block;margin-bottom:6px;'>{art.title}</a>
+          {summary_html}
+        </div>
+        """
+
+    cards = "".join(article_card(art, enrichment) for art, enrichment in items)
+    count = len(items)
+
+    html = f"""
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style='margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;'>
+  <div style='max-width:600px;margin:32px auto;'>
+
+    <!-- Header -->
+    <div style='background:#0f172a;border-radius:12px 12px 0 0;padding:24px 28px;display:flex;align-items:center;gap:12px;'>
+      <div style='width:32px;height:32px;background:#3b82f6;border-radius:8px;display:flex;align-items:center;justify-content:center;'>
+        <span style='color:#fff;font-size:18px;'>📦</span>
+      </div>
+      <div>
+        <div style='color:#fff;font-size:16px;font-weight:700;'>Veritariff</div>
+        <div style='color:#94a3b8;font-size:12px;'>Trade Intelligence Digest</div>
+      </div>
+    </div>
+
+    <!-- Body -->
+    <div style='background:#f8fafc;padding:24px 28px;'>
+      <p style='font-size:14px;color:#475569;margin:0 0 4px;'>Hello {user.email},</p>
+      <p style='font-size:14px;color:#475569;margin:0 0 20px;'>
+        Here are <strong>{count} trade intelligence updates</strong> matched to your organisation's interests from the last 24 hours.
+      </p>
+
+      {cards}
+
+      <p style='font-size:12px;color:#94a3b8;margin-top:24px;text-align:center;'>
+        You're receiving this because you enabled daily digest emails.<br>
+        <a href='https://veritariffai.co/settings/notifications' style='color:#3b82f6;'>Manage preferences</a>
+      </p>
+    </div>
+
+    <!-- Footer -->
+    <div style='background:#0f172a;border-radius:0 0 12px 12px;padding:16px 28px;'>
+      <p style='margin:0;font-size:11px;color:#475569;text-align:center;'>
+        © {today.split()[-1]} Veritariff · Trade intelligence for modern freight forwarders
+      </p>
+    </div>
+
+  </div>
+</body>
+</html>
+"""
+    return subject, html
+
+
+# ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
 

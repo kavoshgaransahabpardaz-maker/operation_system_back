@@ -37,5 +37,12 @@ class Settings(BaseSettings):
 
     TOKEN_ENCRYPTION_KEY: str
 
+    # Outbound email (SMTP)
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    EMAIL_FROM: str = "Veritariff <noreply@veritariff.co>"
+
 
 settings = Settings()

@@ -40,6 +40,28 @@ AI-powered customs brokerage backend. Automatically ingests documents from email
 - Classification confidence < 0.70 → document marked NEEDS_REVIEW
 - Shipment matching: regex first, OpenAI LLM fallback if no refs found
 
+### Quick Commands
+
+**Clear production database (shipments + documents + all cascaded data):**
+```bash
+ssh root@78.129.155.206 "docker exec operation_system_back-postgres-1 psql -U broker -d brokerai -c 'TRUNCATE TABLE shipments, documents CASCADE;'"
+```
+
+**Deploy backend:**
+```bash
+ssh root@78.129.155.206 "cd /opt/operation_system_back && git pull && docker compose -f docker-compose.prod.yml build --no-cache api worker beat && docker compose -f docker-compose.prod.yml up -d"
+```
+
+**Deploy frontend:**
+```bash
+ssh root@78.129.155.206 "cd /opt/operation_system_front && git pull && docker compose -f docker-compose.prod.yml build --no-cache && docker compose -f docker-compose.prod.yml up -d"
+```
+
+**Health check:**
+```bash
+curl https://api.veritariffai.co/health
+```
+
 ### Open Tasks / Pending Work
 - [x] Choose tech stack
 - [x] Scaffold project structure + Docker

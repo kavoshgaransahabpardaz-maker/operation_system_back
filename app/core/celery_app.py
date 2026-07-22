@@ -37,6 +37,7 @@ celery_app.conf.update(
         "tasks.update_trending_topics": {"queue": "intel_enrich"},
         "tasks.rematch_org_articles": {"queue": "intel_enrich"},
         "tasks.send_alert": {"queue": "intel_notify"},
+        "tasks.send_daily_digest": {"queue": "intel_notify"},
     },
     beat_schedule={
         "sync-all-mailboxes": {
@@ -50,6 +51,10 @@ celery_app.conf.update(
         "update-trending-topics": {
             "task": "tasks.update_trending_topics",
             "schedule": crontab(hour=3, minute=0),  # 3am daily
+        },
+        "send-daily-digest": {
+            "task": "tasks.send_daily_digest",
+            "schedule": crontab(minute=0),  # every hour; each user's digest_hour picks their slot
         },
     },
 )
