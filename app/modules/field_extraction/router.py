@@ -50,6 +50,10 @@ class DocumentProductOut(BaseModel):
     gross_weight: str | None
     missing_required_fields: list | None
     is_ready_to_classify: bool
+    hs_verified: bool
+    hs_verified_at: datetime | None
+    hs_verified_by: uuid.UUID | None
+    active_genie_run_id: uuid.UUID | None
     created_at: datetime
 
     model_config = {"from_attributes": True}
