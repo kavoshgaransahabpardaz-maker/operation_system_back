@@ -37,3 +37,27 @@ def encrypt_token(value: str) -> str:
 
 def decrypt_token(encrypted: str) -> str:
     return _fernet.decrypt(encrypted.encode()).decode()
+
+
+def make_unsubscribe_token(user_id: str) -> str:
+    """HMAC-signed token for one-click email unsubscribe (no expiry)."""
+    import hashlib, hmac, base64
+    sig = hmac.new(settings.SECRET_KEY.encode(), user_id.encode(), hashlib.sha256).digest()
+    payload = f"{user_id}:{base64.urlsafe_b64encode(sig).decode().rstrip('=')}"
+    return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+
+
+def verify_unsubscribe_token(token: str) -> str | None:
+    """Verify token and return user_id, or None if invalid."""
+    import hashlib, hmac, base64
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        payload = base64.urlsafe_b64decode(padded).decode()
+        user_id, sig_b64 = payload.rsplit(":", 1)
+        sig = base64.urlsafe_b64decode(sig_b64 + "==")
+        expected = hmac.new(settings.SECRET_KEY.encode(), user_id.encode(), hashlib.sha256).digest()
+        if hmac.compare_digest(sig, expected):
+            return user_id
+    except Exception:
+        pass
+    return None

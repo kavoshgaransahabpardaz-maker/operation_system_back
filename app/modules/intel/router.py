@@ -716,6 +716,47 @@ async def list_alerts(
 
 
 # ---------------------------------------------------------------------------
+# Email unsubscribe (public — no auth, called from email link)
+# ---------------------------------------------------------------------------
+
+from fastapi.responses import HTMLResponse
+
+@router.get("/intel/unsubscribe", response_class=HTMLResponse, include_in_schema=False)
+async def unsubscribe_digest(
+    token: str = Query(...),
+    db: AsyncSession = Depends(get_async_db),
+):
+    from app.core.security import verify_unsubscribe_token
+    user_id_str = verify_unsubscribe_token(token)
+    if not user_id_str:
+        return HTMLResponse("<h2>Invalid or expired unsubscribe link.</h2>", status_code=400)
+
+    user_uuid = uuid.UUID(user_id_str)
+    result = await db.execute(
+        select(NotificationPreference).where(NotificationPreference.user_id == user_uuid)
+    )
+    pref = result.scalar_one_or_none()
+    if pref:
+        pref.delivery_channels = [c for c in (pref.delivery_channels or []) if c != "email"]
+        await db.commit()
+
+    return HTMLResponse("""
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"><title>Unsubscribed</title></head>
+    <body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f8fafc;">
+      <div style="text-align:center;padding:40px;background:#fff;border-radius:12px;border:1px solid #e2e8f0;max-width:420px;">
+        <div style="font-size:40px;margin-bottom:16px;">✓</div>
+        <h2 style="color:#0f172a;margin:0 0 8px;">Unsubscribed</h2>
+        <p style="color:#475569;margin:0 0 20px;">You've been removed from the daily digest. You can re-enable emails anytime in your notification preferences.</p>
+        <a href="https://veritariffai.co/settings/notifications" style="background:#3b82f6;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:600;">Manage Preferences</a>
+      </div>
+    </body>
+    </html>
+    """)
+
+
+# ---------------------------------------------------------------------------
 # Notification preferences
 # ---------------------------------------------------------------------------
 

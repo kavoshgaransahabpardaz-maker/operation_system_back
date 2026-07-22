@@ -771,7 +771,6 @@ def send_daily_digest_task():
         AlertDelivery,
         IntelArticle,
         IntelEnrichment,
-        IntelMatch,
         NotificationPreference,
     )
     from app.modules.user_management.models import User
@@ -779,6 +778,8 @@ def send_daily_digest_task():
     current_hour = datetime.now(timezone.utc).hour
 
     async def _run():
+        from app.core.security import make_unsubscribe_token
+
         async with AsyncSessionLocal() as db:
             # Find all prefs due this hour
             prefs_result = await db.execute(
@@ -793,50 +794,39 @@ def send_daily_digest_task():
 
             since = datetime.now(timezone.utc) - timedelta(hours=24)
 
+            # Load ALL enriched articles from the last 24h once — shared across all users
+            articles_result = await db.execute(
+                select(IntelArticle)
+                .where(IntelArticle.ingested_at >= since, IntelArticle.is_duplicate == False)
+                .order_by(IntelArticle.ingested_at.desc())
+            )
+            all_articles = list(articles_result.scalars())
+
+            if not all_articles:
+                return
+
+            article_ids = [a.id for a in all_articles]
+            enrichments_by_article = {
+                e.article_id: e
+                for e in (
+                    await db.execute(
+                        select(IntelEnrichment).where(IntelEnrichment.article_id.in_(article_ids))
+                    )
+                ).scalars()
+            }
+
             for pref in prefs:
                 if "email" not in (pref.delivery_channels or []):
                     continue
 
-                # Load the user
-                user_result = await db.execute(
-                    select(User).where(User.id == pref.user_id)
-                )
+                user_result = await db.execute(select(User).where(User.id == pref.user_id))
                 user = user_result.scalar_one_or_none()
                 if not user or not user.is_active:
                     continue
 
-                # Fetch matches for this org in the last 24 h
-                matches_result = await db.execute(
-                    select(IntelMatch)
-                    .where(
-                        IntelMatch.org_id == pref.org_id,
-                        IntelMatch.created_at >= since,
-                    )
-                    .order_by(IntelMatch.created_at.desc())
-                )
-                matches = list(matches_result.scalars())
-                if not matches:
-                    continue
-
-                # Collect unique article IDs
-                article_ids = list({m.article_id for m in matches})
-
-                # Load articles
-                articles_result = await db.execute(
-                    select(IntelArticle).where(IntelArticle.id.in_(article_ids))
-                )
-                articles = list(articles_result.scalars())
-                articles_by_id = {a.id: a for a in articles}
-
-                # Load enrichments
-                enrichments_result = await db.execute(
-                    select(IntelEnrichment).where(IntelEnrichment.article_id.in_(article_ids))
-                )
-                enrichments_by_article = {e.article_id: e for e in enrichments_result.scalars()}
-
-                # Filter by impact score and event types
+                # Filter by user's impact score + event type preferences
                 filtered = []
-                for art in articles:
+                for art in all_articles:
                     enrichment = enrichments_by_article.get(art.id)
                     impact = (enrichment.impact_score if enrichment else None) or 0
                     if impact < pref.min_impact_score:
@@ -849,22 +839,23 @@ def send_daily_digest_task():
                 if not filtered:
                     continue
 
-                # Sort by impact score desc
-                filtered.sort(
-                    key=lambda t: (t[1].impact_score if t[1] else 0) or 0,
-                    reverse=True,
-                )
+                # Sort by impact score desc, cap at 30 articles
+                filtered.sort(key=lambda t: (t[1].impact_score if t[1] else 0) or 0, reverse=True)
+                filtered = filtered[:30]
 
-                subject, html = _build_digest_email(user, filtered)  # list of (article, enrichment)
+                unsubscribe_url = (
+                    f"https://api.veritariffai.co/api/v1/intel/unsubscribe"
+                    f"?token={make_unsubscribe_token(str(user.id))}"
+                )
+                subject, html = _build_digest_email(user, filtered, unsubscribe_url)
                 sent = send_email(user.email, subject, html)
 
-                # Log delivery
                 delivery = AlertDelivery(
                     org_id=pref.org_id,
                     article_id=None,
                     delivery_type="email_digest",
                     subject=subject,
-                    body_summary=f"{len(filtered)} articles sent to {user.email}",  # filtered = list[(article, enrichment)]
+                    body_summary=f"{len(filtered)} articles sent to {user.email}",
                     status="sent" if sent else "failed",
                 )
                 db.add(delivery)
@@ -878,7 +869,7 @@ def send_daily_digest_task():
         logger.error("send_daily_digest_task failed: %s", exc)
 
 
-def _build_digest_email(user: "User", items: list) -> tuple[str, str]:
+def _build_digest_email(user: "User", items: list, unsubscribe_url: str = "") -> tuple[str, str]:
     """Build subject + HTML body for the daily digest. items = list of (IntelArticle, IntelEnrichment|None)."""
     from datetime import date
 
@@ -943,6 +934,7 @@ def _build_digest_email(user: "User", items: list) -> tuple[str, str]:
       <p style='font-size:12px;color:#94a3b8;margin-top:24px;text-align:center;'>
         You're receiving this because you enabled daily digest emails.<br>
         <a href='https://veritariffai.co/settings/notifications' style='color:#3b82f6;'>Manage preferences</a>
+        {f" · <a href='{unsubscribe_url}' style='color:#94a3b8;'>Unsubscribe</a>" if unsubscribe_url else ""}
       </p>
     </div>
 
