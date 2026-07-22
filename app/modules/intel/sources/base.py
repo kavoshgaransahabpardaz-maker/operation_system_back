@@ -192,34 +192,28 @@ BUILTIN_SOURCES: list[dict] = [
 # ---------------------------------------------------------------------------
 
 async def seed_builtin_sources(db) -> None:
-    """Insert BUILTIN_SOURCES that don't already exist (matched by name).
-    Also back-fills `category` on existing rows that were seeded without it."""
-    from sqlalchemy import select
+    """Upsert BUILTIN_SOURCES — idempotent via ON CONFLICT (url) DO NOTHING."""
+    import uuid
+    from datetime import datetime, timezone
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
     from app.modules.intel.models import IntelSource
 
-    for spec in BUILTIN_SOURCES:
-        result = await db.execute(
-            select(IntelSource).where(IntelSource.name == spec["name"]).limit(1)
-        )
-        existing = result.scalar_one_or_none()
-        if existing is None:
-            source = IntelSource(
-                name=spec["name"],
-                source_type=spec.get("source_type"),
-                category=spec.get("category"),
-                url=spec["url"],
-                poll_cadence_minutes=spec.get("poll_cadence_minutes", 60),
-                priority=spec.get("priority", 5),
-                is_active=True,
-            )
-            db.add(source)
-            logger.info("Seeded built-in intel source: %s", spec["name"])
-        else:
-            # Back-fill category + priority if missing
-            if not existing.category and spec.get("category"):
-                existing.category = spec["category"]
-            if existing.priority == 5 and spec.get("priority") != 5:
-                existing.priority = spec["priority"]
+    rows = [
+        {
+            "id": uuid.uuid4(),
+            "name": spec["name"],
+            "source_type": spec.get("source_type"),
+            "category": spec.get("category"),
+            "url": spec["url"],
+            "poll_cadence_minutes": spec.get("poll_cadence_minutes", 60),
+            "priority": spec.get("priority", 5),
+            "is_active": True,
+            "created_at": datetime.now(timezone.utc),
+        }
+        for spec in BUILTIN_SOURCES
+    ]
 
+    stmt = pg_insert(IntelSource).values(rows).on_conflict_do_nothing(index_elements=["url"])
+    await db.execute(stmt)
     await db.commit()
     logger.info("Built-in intel sources seeding complete.")
