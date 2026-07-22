@@ -1,9 +1,10 @@
 """
-HS Genie — per-product HS code classification and verification endpoints.
+HS Genie — per-product classification, verification, and field-editing endpoints.
 
-Verify path  : records user acceptance of the existing HS code, no external call.
-Genie path   : calls the external text-classification API, stores full audit trail.
-Feedback     : proxies 👍/👎 to the external API and persists the signal.
+Verify path  : calls the external text-classification API (path='verify').
+               If the existing HS code is in the candidates the frontend auto-confirms it.
+Genie path   : same API call (path='genie') — used when the product has no code yet.
+Feedback     : proxies thumbs-up/down to the external API and persists the signal.
 """
 import logging
 import uuid
@@ -31,6 +32,92 @@ _TIMEOUT = 60.0
 
 # ── Pydantic I/O models ───────────────────────────────────────────────────────
 
+class DocumentProductOut(BaseModel):
+    id: str
+    document_id: str
+    shipment_id: str | None
+    org_id: str
+    product_name: str | None
+    material: str | None
+    intended_use: str | None
+    description: str | None
+    quantity: str | None
+    unit_price: str | None
+    line_total: str | None
+    currency: str | None
+    ship_from: str | None
+    origin_country: str | None
+    destination_country: str | None
+    existing_hs_code: str | None
+    existing_national_code: str | None
+    existing_national_code_jurisdiction: str | None
+    lot_number: str | None
+    expiry_date: str | None
+    net_weight: str | None
+    gross_weight: str | None
+    missing_required_fields: list | None
+    is_ready_to_classify: bool
+    hs_verified: bool
+    hs_verified_at: str | None
+    hs_verified_by: str | None
+    active_genie_run_id: str | None
+    created_at: str
+
+
+def _product_to_out(p: DocumentProduct) -> DocumentProductOut:
+    return DocumentProductOut(
+        id=str(p.id),
+        document_id=str(p.document_id),
+        shipment_id=str(p.shipment_id) if p.shipment_id else None,
+        org_id=str(p.org_id),
+        product_name=p.product_name,
+        material=p.material,
+        intended_use=p.intended_use,
+        description=p.description,
+        quantity=p.quantity,
+        unit_price=p.unit_price,
+        line_total=p.line_total,
+        currency=p.currency,
+        ship_from=p.ship_from,
+        origin_country=p.origin_country,
+        destination_country=p.destination_country,
+        existing_hs_code=p.existing_hs_code,
+        existing_national_code=p.existing_national_code,
+        existing_national_code_jurisdiction=p.existing_national_code_jurisdiction,
+        lot_number=p.lot_number,
+        expiry_date=p.expiry_date,
+        net_weight=p.net_weight,
+        gross_weight=p.gross_weight,
+        missing_required_fields=p.missing_required_fields,
+        is_ready_to_classify=p.is_ready_to_classify,
+        hs_verified=p.hs_verified,
+        hs_verified_at=p.hs_verified_at.isoformat() if p.hs_verified_at else None,
+        hs_verified_by=str(p.hs_verified_by) if p.hs_verified_by else None,
+        active_genie_run_id=str(p.active_genie_run_id) if p.active_genie_run_id else None,
+        created_at=p.created_at.isoformat(),
+    )
+
+
+class ProductUpdateRequest(BaseModel):
+    product_name: str | None = None
+    material: str | None = None
+    intended_use: str | None = None
+    description: str | None = None
+    quantity: str | None = None
+    unit_price: str | None = None
+    line_total: str | None = None
+    currency: str | None = None
+    ship_from: str | None = None
+    origin_country: str | None = None
+    destination_country: str | None = None
+    existing_hs_code: str | None = None
+    existing_national_code: str | None = None
+    lot_number: str | None = None
+    expiry_date: str | None = None
+    net_weight: str | None = None
+    gross_weight: str | None = None
+
+
 class HsGenieRunOut(BaseModel):
     run_id: str
     path: str
@@ -38,9 +125,8 @@ class HsGenieRunOut(BaseModel):
     input_text: str | None
     candidates: list | None
     chosen_code: str | None
+    existing_hs_code: str | None
     feedback_signal: str | None
-
-    model_config = {"from_attributes": True}
 
 
 class HsSelectRequest(BaseModel):
@@ -52,7 +138,7 @@ class HsFeedbackRequest(BaseModel):
     run_id: str
     is_correct: bool
     correct_code: str | None = None
-    reason: str | None = None   # "wrong_material"|"wrong_process"|"wrong_dimension"|"other"
+    reason: str | None = None
 
 
 class HsGenieRunFull(BaseModel):
@@ -66,8 +152,6 @@ class HsGenieRunFull(BaseModel):
     corrected_code: str | None
     correction_reason: str | None
     created_at: str
-
-    model_config = {"from_attributes": True}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -110,7 +194,56 @@ async def _load_run(run_id: uuid.UUID, db: AsyncSession) -> HsGenieRun:
     return run
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
+async def _call_classify_api(text: str) -> tuple[str | None, list]:
+    """Call classify/text API and return (record_id, candidates)."""
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            _GENIE_CLASSIFY_URL,
+            headers={"accept": "application/json"},
+            data={"text": text},
+        )
+        resp.raise_for_status()
+        api_data = resp.json()
+    return api_data.get("record_id"), api_data.get("hs_codes") or []
+
+
+# ── Product CRUD ──────────────────────────────────────────────────────────────
+
+@router.get("/products/{product_id}", response_model=DocumentProductOut)
+async def get_product(
+    product_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Return a single product by ID."""
+    p = await _load_product(product_id, current_user.org_id, db)
+    return _product_to_out(p)
+
+
+@router.patch("/products/{product_id}", response_model=DocumentProductOut)
+async def update_product(
+    product_id: uuid.UUID,
+    body: ProductUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Partial update of editable product fields. Only provided fields are written."""
+    p = await _load_product(product_id, current_user.org_id, db)
+
+    update_data = body.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(p, field, value)
+
+    # Re-evaluate readiness
+    required = ["product_name", "existing_hs_code", "origin_country", "destination_country"]
+    p.is_ready_to_classify = all(getattr(p, f) for f in required)
+
+    await db.commit()
+    await db.refresh(p)
+    return _product_to_out(p)
+
+
+# ── HS classification ─────────────────────────────────────────────────────────
 
 @router.post("/products/{product_id}/hs-verify", response_model=HsGenieRunOut)
 async def hs_verify(
@@ -119,28 +252,36 @@ async def hs_verify(
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    PATH A — Verify: user accepts the existing HS code on the line item.
-    No external API call is made. Records a HsGenieRun(path='verify').
+    PATH A — Verify: build description from product fields, call the external
+    classify/text API, and return candidates.  The frontend auto-highlights
+    the existing HS code when it appears in the candidate list, allowing the
+    user to confirm with one click (thumbs-up) or override (thumbs-down + correction).
     """
     p = await _load_product(product_id, current_user.org_id, db)
-    if not p.existing_hs_code:
+    text = _build_text(p)
+    if not text.strip():
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="No existing HS code to verify",
+            detail="Product has no description to classify",
         )
 
-    now = datetime.now(timezone.utc)
-    p.hs_verified = True
-    p.hs_verified_at = now
-    p.hs_verified_by = current_user.id
+    try:
+        record_id, candidates = await _call_classify_api(text)
+    except httpx.HTTPStatusError as e:
+        logger.error("Classify API error %s: %s", e.response.status_code, e.response.text)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Classification API error")
+    except Exception as e:
+        logger.error("Classify API request failed: %s", e)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Classification API unavailable")
 
+    existing_code = p.existing_hs_code
     run = HsGenieRun(
         product_id=product_id,
         org_id=current_user.org_id,
         path="verify",
-        chosen_code=p.existing_hs_code,
-        chosen_at=now,
-        chosen_by=current_user.id,
+        record_id=record_id,
+        candidates=candidates,
+        input_text=text,
         run_by=current_user.id,
     )
     db.add(run)
@@ -151,10 +292,11 @@ async def hs_verify(
     return HsGenieRunOut(
         run_id=str(run.id),
         path="verify",
-        record_id=None,
-        input_text=None,
-        candidates=None,
-        chosen_code=run.chosen_code,
+        record_id=record_id,
+        input_text=text,
+        candidates=candidates,
+        chosen_code=None,
+        existing_hs_code=existing_code,
         feedback_signal=None,
     )
 
@@ -166,8 +308,9 @@ async def hs_classify(
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    PATH B — Ask the HS Genie: calls the external text-classification API.
-    Stores full candidate list for audit trail.
+    PATH B — Ask the HS Genie: build description from product fields, call
+    the external classify/text API, and return candidates. Used when the
+    product has no existing HS code or the user wants fresh suggestions.
     """
     p = await _load_product(product_id, current_user.org_id, db)
     text = _build_text(p)
@@ -178,24 +321,15 @@ async def hs_classify(
         )
 
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.post(
-                _GENIE_CLASSIFY_URL,
-                headers={"accept": "application/json"},
-                data={"text": text},
-            )
-            resp.raise_for_status()
-            api_data = resp.json()
+        record_id, candidates = await _call_classify_api(text)
     except httpx.HTTPStatusError as e:
-        logger.error("HS Genie API error %s: %s", e.response.status_code, e.response.text)
+        logger.error("Classify API error %s: %s", e.response.status_code, e.response.text)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Classification API error")
     except Exception as e:
-        logger.error("HS Genie request failed: %s", e)
+        logger.error("Classify API request failed: %s", e)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Classification API unavailable")
 
-    candidates = api_data.get("hs_codes") or []
-    record_id = api_data.get("record_id")
-
+    existing_code = p.existing_hs_code
     run = HsGenieRun(
         product_id=product_id,
         org_id=current_user.org_id,
@@ -217,6 +351,7 @@ async def hs_classify(
         input_text=text,
         candidates=candidates,
         chosen_code=None,
+        existing_hs_code=existing_code,
         feedback_signal=None,
     )
 
@@ -228,7 +363,7 @@ async def hs_select(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
 ):
-    """User picks one of the Genie candidates — updates product HS code and audit run."""
+    """User picks one of the candidates — updates product HS code and audit run."""
     p = await _load_product(product_id, current_user.org_id, db)
     run = await _load_run(uuid.UUID(body.run_id), db)
 
@@ -251,6 +386,7 @@ async def hs_select(
         input_text=run.input_text,
         candidates=run.candidates,
         chosen_code=run.chosen_code,
+        existing_hs_code=p.existing_hs_code,
         feedback_signal=run.feedback_signal,
     )
 
@@ -263,9 +399,13 @@ async def hs_feedback(
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    Submit 👍/👎 feedback. Proxies to the external API when a record_id exists,
-    and persists the signal + corrected code for training data.
+    Submit thumbs-up/down feedback. Proxies to the external API when a
+    record_id exists, and persists the signal + corrected code for training.
+
+    is_correct=True  → call external API with is_correct: true
+    is_correct=False → call external API with is_correct: false, correct_code, comment
     """
+    p = await _load_product(product_id, current_user.org_id, db)
     run = await _load_run(uuid.UUID(body.run_id), db)
 
     now = datetime.now(timezone.utc)
@@ -274,7 +414,6 @@ async def hs_feedback(
     run.correction_reason = body.reason if not body.is_correct else None
     run.feedback_at = now
 
-    # Proxy to external API when we have a record_id from a genie run
     if run.record_id:
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -288,7 +427,6 @@ async def hs_feedback(
                     },
                 )
         except Exception as e:
-            # Non-fatal — local record is saved regardless
             logger.warning("Could not proxy feedback to external API: %s", e)
 
     await db.commit()
@@ -300,6 +438,7 @@ async def hs_feedback(
         input_text=run.input_text,
         candidates=run.candidates,
         chosen_code=run.chosen_code,
+        existing_hs_code=p.existing_hs_code,
         feedback_signal=run.feedback_signal,
     )
 
